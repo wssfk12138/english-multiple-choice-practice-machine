@@ -21,7 +21,10 @@ import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, del, get, patch, post, put } from '../api'
 import QuestionBankSwitcher from '../components/QuestionBankSwitcher.vue'
+import { useConfirm } from '../composables/useConfirm'
 import { loadQuestionBankProfiles, questionBankProfilesState } from '../services/questionBankProfiles'
+
+const confirm = useConfirm()
 import {
   type LabelScope,
   type LabelStatus,
@@ -502,7 +505,12 @@ async function publish() {
   error.value = ''
   try {
     if (current.value.draft.warnings?.length) return
-    if (!confirm(`确认发布 ${current.value.draft.year} 年题库吗？发布后模型不能直接修改正式题库。`)) return
+    const ok = await confirm({
+      title: '发布题库？',
+      message: `确认发布 ${current.value.draft.year} 年题库吗？发布后模型不能直接修改正式题库。`,
+      confirmText: '发布',
+    })
+    if (!ok) return
     const result: any = await post(`/imports/${current.value.id}/publish`)
     notice.value = '题库已正式发布'
     await loadJobs()
@@ -536,7 +544,13 @@ async function uploadEsq() {
 }
 
 async function removeImportJob(job: any, esq = false) {
-  if (!confirm(`将未完成导入“${job.filename}”及原始文件移入回收站？`)) return
+  const ok = await confirm({
+    title: '移入回收站？',
+    message: `将未完成导入“${job.filename}”及原始文件移入回收站？`,
+    confirmText: '移入回收站',
+    danger: true,
+  })
+  if (!ok) return
   try {
     await del(`${esq ? '/question-banks/imports' : '/imports'}/${job.id}`)
     if (esq) {

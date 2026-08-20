@@ -59,16 +59,18 @@ def serialize_question(
     option_order: list[str] | None = None,
     include_answer: bool = False,
     preserve_option_labels: bool = False,
+    option_rows: list[sqlite3.Row] | None = None,
 ) -> dict[str, Any]:
-    option_rows = connection.execute(
-        """
-        SELECT id, stable_key, original_label, content, sequence, metadata
-        FROM options
-        WHERE question_id = ?
-        ORDER BY sequence
-        """,
-        (row["id"],),
-    ).fetchall()
+    if option_rows is None:
+        option_rows = connection.execute(
+            """
+            SELECT id, stable_key, original_label, content, sequence, metadata
+            FROM options
+            WHERE question_id = ?
+            ORDER BY sequence
+            """,
+            (row["id"],),
+        ).fetchall()
     options = [dict(option) for option in option_rows]
     if option_order:
         order_index = {key: index for index, key in enumerate(option_order)}
@@ -138,6 +140,22 @@ def serialize_unit(
     if only_question_ids is not None:
         question_rows = [row for row in question_rows if row["id"] in only_question_ids]
 
+    # Batch-load every option for this unit in a single query (avoids N+1).
+    options_by_question: dict[int, list[sqlite3.Row]] = {}
+    if question_rows:
+        placeholders = ",".join("?" for _ in question_rows)
+        option_rows = connection.execute(
+            f"""
+            SELECT id, question_id, stable_key, original_label, content, sequence, metadata
+            FROM options
+            WHERE question_id IN ({placeholders})
+            ORDER BY question_id, sequence
+            """,
+            [row["id"] for row in question_rows],
+        ).fetchall()
+        for option_row in option_rows:
+            options_by_question.setdefault(option_row["question_id"], []).append(option_row)
+
     shared_part_b_order: list[str] | None = None
     if (
         unit["unit_type"] == "part_b"
@@ -145,11 +163,8 @@ def serialize_unit(
         and shuffle_options
         and not answer_orders
     ):
-        option_rows = connection.execute(
-            "SELECT stable_key FROM options WHERE question_id = ? ORDER BY sequence",
-            (question_rows[0]["id"],),
-        ).fetchall()
-        shared_part_b_order = [row["stable_key"] for row in option_rows]
+        first_options = options_by_question.get(question_rows[0]["id"], [])
+        shared_part_b_order = [row["stable_key"] for row in first_options]
         random.shuffle(shared_part_b_order)
 
     questions = [
@@ -160,6 +175,7 @@ def serialize_unit(
             option_order=(answer_orders or {}).get(row["id"]) or shared_part_b_order,
             include_answer=include_answers,
             preserve_option_labels=unit["subtype"] == "true_false",
+            option_rows=options_by_question.get(row["id"]),
         )
         for row in question_rows
     ]

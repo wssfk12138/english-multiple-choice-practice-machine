@@ -13,6 +13,10 @@ frontend/*.tsbuildinfo
 frontend/vite.config.js
 frontend/vite.config.d.ts
 
+# PyInstaller build artifacts
+build/
+dist/
+
 # Local runtime data and private development artifacts
 backend/data/
 work/

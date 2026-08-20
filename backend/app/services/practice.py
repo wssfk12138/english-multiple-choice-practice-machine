@@ -290,12 +290,9 @@ def get_session(connection: sqlite3.Connection, session_id: int) -> dict[str, An
     units = []
     only_by_unit: dict[int, set[int]] = {}
     if session["mode"] == "wrong":
+        # answers already carries questions.unit_id from the JOIN above.
         for row in answers:
-            question = connection.execute(
-                "SELECT unit_id FROM questions WHERE id = ?", (row["question_id"],)
-            ).fetchone()
-            if question:
-                only_by_unit.setdefault(question["unit_id"], set()).add(row["question_id"])
+            only_by_unit.setdefault(row["unit_id"], set()).add(row["question_id"])
     for unit_id in unit_ids:
         unit = serialize_unit(
             connection,

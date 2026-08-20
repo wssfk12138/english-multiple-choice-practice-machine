@@ -2,8 +2,10 @@
 import { RotateCcw, Trash2 } from 'lucide-vue-next'
 import { onMounted, ref } from 'vue'
 import { del, get, post } from '../api'
+import { useConfirm } from '../composables/useConfirm'
 
 const items = ref<any[]>([])
+const confirm = useConfirm()
 const error = ref('')
 
 async function load() {
@@ -27,7 +29,13 @@ async function restore(item: any) {
 }
 
 async function purge(item: any) {
-  if (!window.confirm(`永久删除“${item.resource_name}”？此操作无法恢复。`)) return
+  const ok = await confirm({
+    title: '永久删除？',
+    message: `永久删除“${item.resource_name}”？此操作无法恢复。`,
+    confirmText: '永久删除',
+    danger: true,
+  })
+  if (!ok) return
   try {
     await del(`/trash/${item.id}`)
     await load()

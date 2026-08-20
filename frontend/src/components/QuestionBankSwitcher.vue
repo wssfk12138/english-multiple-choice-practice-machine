@@ -9,8 +9,10 @@ import {
   questionBankProfilesState,
   renameQuestionBankProfile,
 } from '../services/questionBankProfiles'
+import { useConfirm } from '../composables/useConfirm'
 
 const emit = defineEmits<{ changed: [] }>()
+const confirm = useConfirm()
 const managing = ref(false)
 const newName = ref('')
 const error = ref('')
@@ -53,7 +55,13 @@ async function renameProfile(profile: any) {
 }
 
 async function removeProfile(profile: any) {
-  if (!window.confirm(`将“${profile.name}”及其中 ${profile.paper_count || 0} 套试卷移入回收站？七天内可以恢复。`)) return
+  const ok = await confirm({
+    title: `删除题库配置“${profile.name}”？`,
+    message: `将“${profile.name}”及其中 ${profile.paper_count || 0} 套试卷移入回收站？七天内可以恢复。`,
+    confirmText: '移入回收站',
+    danger: true,
+  })
+  if (!ok) return
   try {
     await deleteQuestionBankProfile(profile.id)
     emit('changed')

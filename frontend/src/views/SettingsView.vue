@@ -16,6 +16,9 @@ import {
 } from 'lucide-vue-next'
 import { onMounted, reactive, ref } from 'vue'
 import { del, get, post, put } from '../api'
+import { useConfirm } from '../composables/useConfirm'
+
+const confirm = useConfirm()
 
 type AiModel = {
   model_id: string
@@ -213,7 +216,13 @@ async function setAllVisible(profile: AiProfile, visible: boolean) {
 }
 
 async function removeProfile(profile: AiProfile) {
-  if (!window.confirm(`删除 API 配置“${profile.name}”？已保存的对话不会被删除。`)) return
+  const ok = await confirm({
+    title: '删除 API 配置？',
+    message: `删除 API 配置“${profile.name}”？已保存的对话不会被删除。`,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
   try {
     await del(`/ai/profiles/${profile.id}`)
     message.value = `已删除“${profile.name}”`

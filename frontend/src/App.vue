@@ -2,8 +2,11 @@
 import { BookMarked, BookOpenText, Brain, FileUp, Home, Library, MessageCircle, Moon, Settings, Sun } from 'lucide-vue-next'
 import { onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
+import ConfirmDialog from './components/ConfirmDialog.vue'
+import { provideConfirm } from './composables/useConfirm'
 
 const route = useRoute()
+provideConfirm()
 const dark = ref(false)
 function applyTheme() {
   document.documentElement.classList.toggle('dark', dark.value)
@@ -56,4 +59,5 @@ onMounted(() => {
       <RouterView />
     </main>
   </div>
+  <ConfirmDialog />
 </template>

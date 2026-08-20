@@ -3,8 +3,10 @@ import { BookOpen, Check, RefreshCw, Search, Settings, Star, Trash2 } from 'luci
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { del, get, post, put } from '../api'
+import { useConfirm } from '../composables/useConfirm'
 
 const route = useRoute()
+const confirm = useConfirm()
 const items = ref<any[]>([])
 const counts = ref<any>({ total:0, frequent:0, mastered:0, pending:0, review:0 })
 const selected = ref<any>(null)
@@ -99,7 +101,14 @@ async function saveEdit() {
 }
 
 async function removeEntry() {
-  if (!selected.value || !confirm(`删除 ${selected.value.term} 吗？`)) return
+  if (!selected.value) return
+  const ok = await confirm({
+    title: '删除词条？',
+    message: `删除 ${selected.value.term} 吗？`,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
   await del(`/vocabulary/${selected.value.id}`)
   selected.value = null
   await load()

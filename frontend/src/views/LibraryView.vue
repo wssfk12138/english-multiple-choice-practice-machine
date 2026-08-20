@@ -5,8 +5,10 @@ import { useRouter } from 'vue-router'
 import { del, get, post } from '../api'
 import QuestionBankSwitcher from '../components/QuestionBankSwitcher.vue'
 import { loadQuestionBankProfiles, questionBankProfilesState } from '../services/questionBankProfiles'
+import { useConfirm } from '../composables/useConfirm'
 
 const router = useRouter()
+const confirm = useConfirm()
 const papers = ref<any[]>([])
 const error = ref('')
 const batchMode = ref(false)
@@ -84,7 +86,13 @@ async function moveSelected() {
 
 async function deleteSelected() {
   if (!selectedIds.value.size) return
-  if (!window.confirm(`将选中的 ${selectedIds.value.size} 套试卷移入回收站？`)) return
+  const ok = await confirm({
+    title: '移入回收站？',
+    message: `将选中的 ${selectedIds.value.size} 套试卷移入回收站？`,
+    confirmText: '移入回收站',
+    danger: true,
+  })
+  if (!ok) return
   try {
     for (const id of selectedIds.value) await del(`/papers/${id}`)
     leaveBatch()

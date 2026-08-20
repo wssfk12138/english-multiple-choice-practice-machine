@@ -7,10 +7,12 @@ answer handling, and label import rules as a user-imported package.
 
 from __future__ import annotations
 
+import json
+import zipfile
 from pathlib import Path
 from typing import Any
 
-from ..config import ROOT_DIR
+from ..config import BUNDLED_BANK_DIR
 from ..database import connect
 from .esq import load_esq_package, publish_package
 
@@ -19,7 +21,17 @@ BUNDLED_BANKS: tuple[tuple[str, str], ...] = (
     ("postgraduate-english-one.esq", "考研英语一"),
     ("postgraduate-english-two.esq", "考研英语二"),
 )
-BUNDLED_BANK_DIR = ROOT_DIR / "examples" / "bundled-banks"
+
+
+def _read_package_identity(path: Path) -> tuple[str, str]:
+    """Read only the manifest to get (package_id, content_version).
+
+    Avoids fully parsing and validating a large ESQ package on every startup
+    when it is already installed.
+    """
+    with zipfile.ZipFile(path) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+    return str(manifest["packageId"]), str(manifest["contentVersion"])
 
 
 def _get_or_create_profile(connection: Any, name: str) -> int:
@@ -78,24 +90,25 @@ def install_bundled_question_banks() -> list[dict[str, Any]]:
         package_path = BUNDLED_BANK_DIR / filename
         if not package_path.is_file():
             raise RuntimeError(f"内置题库文件缺失：{filename}")
-        package = load_esq_package(package_path)
-        manifest = package["manifest"]
-        package_id = manifest["packageId"]
-        content_version = manifest["contentVersion"]
+        # Fast path: read only the manifest to check whether this package
+        # version is already installed, skipping the full parse on later runs.
+        package_id, content_version = _read_package_identity(package_path)
         with connect() as connection:
             existing = connection.execute(
                 "SELECT 1 FROM question_bank_packages WHERE package_id = ? AND content_version = ? LIMIT 1",
                 (package_id, content_version),
             ).fetchone()
-            if existing:
-                results.append(
-                    {
-                        "packageId": package_id,
-                        "contentVersion": content_version,
-                        "status": "already_installed",
-                    }
-                )
-                continue
+        if existing:
+            results.append(
+                {
+                    "packageId": package_id,
+                    "contentVersion": content_version,
+                    "status": "already_installed",
+                }
+            )
+            continue
+        package = load_esq_package(package_path)
+        with connect() as connection:
             profile_id = _get_or_create_profile(connection, profile_name)
             resolutions = _conflict_resolutions(connection, profile_id, package)
             result = publish_package(

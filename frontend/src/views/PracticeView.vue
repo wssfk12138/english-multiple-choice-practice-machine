@@ -17,8 +17,10 @@ import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { get, post, put } from '../api'
 import ContentBlocks from '../components/ContentBlocks.vue'
 import ListeningPlayer from '../components/ListeningPlayer.vue'
+import { useConfirm } from '../composables/useConfirm'
 
 const route = useRoute()
+const confirm = useConfirm()
 const router = useRouter()
 const session = ref<any>(null)
 const activeUnitIndex = ref(0)
@@ -430,7 +432,12 @@ onBeforeUnmount(() => {
 })
 onBeforeRouteLeave(async () => {
   if (isListening.value && session.value?.status === 'active' && !activeUnitSubmitted.value) {
-    const proceed = window.confirm('听力练习尚未完成，本次练习记录不会保留。是否继续退出？')
+    const proceed = await confirm({
+      title: '退出听力练习？',
+      message: '听力练习尚未完成，本次练习记录不会保留。是否继续退出？',
+      confirmText: '退出',
+      danger: true,
+    })
     if (!proceed) return false
   }
   await flushVocabularyTranslations('practice_exit')
@@ -541,7 +548,12 @@ async function submitCurrentUnit() {
     await focusUnanswered(missing.unitIndex, missing.question)
     return
   }
-  if (!confirm(`确定提交“${activeUnit.value.title}”吗？提交后会显示本篇对错，且本篇不能继续修改。`)) return
+  const ok = await confirm({
+    title: '提交本篇？',
+    message: `确定提交“${activeUnit.value.title}”吗？提交后会显示本篇对错，且本篇不能继续修改。`,
+    confirmText: '提交',
+  })
+  if (!ok) return
   const submittedUnitId = activeUnit.value.id
   try {
     session.value = await post(
@@ -562,7 +574,12 @@ async function submitSession() {
     return
   }
   const label = session.value.mode === 'paper' ? '整年试卷' : '本次练习'
-  if (!confirm(`确定提交${label}吗？提交后才会显示对错，且不能继续修改。`)) return
+  const ok = await confirm({
+    title: '提交练习？',
+    message: `确定提交${label}吗？提交后才会显示对错，且不能继续修改。`,
+    confirmText: '提交',
+  })
+  if (!ok) return
   try {
     session.value = await post(`/practice/sessions/${session.value.id}/submit`)
     finishTimer()

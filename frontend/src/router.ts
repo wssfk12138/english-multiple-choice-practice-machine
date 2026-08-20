@@ -1,13 +1,15 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import AiAssistant from './components/AiAssistant.vue'
-import DashboardView from './views/DashboardView.vue'
-import ImportView from './views/ImportView.vue'
-import LibraryView from './views/LibraryView.vue'
-import PracticeView from './views/PracticeView.vue'
-import SettingsView from './views/SettingsView.vue'
-import WrongView from './views/WrongView.vue'
-import VocabularyView from './views/VocabularyView.vue'
-import TrashView from './views/TrashView.vue'
+
+// 路由懒加载：按需加载视图，减小首屏 JS 体积
+const DashboardView = () => import('./views/DashboardView.vue')
+const LibraryView = () => import('./views/LibraryView.vue')
+const PracticeView = () => import('./views/PracticeView.vue')
+const WrongView = () => import('./views/WrongView.vue')
+const VocabularyView = () => import('./views/VocabularyView.vue')
+const ImportView = () => import('./views/ImportView.vue')
+const AiAssistant = () => import('./components/AiAssistant.vue')
+const SettingsView = () => import('./views/SettingsView.vue')
+const TrashView = () => import('./views/TrashView.vue')
 
 export default createRouter({
   history: createWebHistory(),
