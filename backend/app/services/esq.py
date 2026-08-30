@@ -1153,6 +1153,7 @@ def export_package(
                 file_token = hashlib.sha256(new_id.encode()).hexdigest()[:24]
                 asset_path = f"assets/{'audio' if asset_row['media_type'].startswith('audio/') else 'images'}/{file_token}{extension}"
                 asset_metadata = json.loads(asset_row["metadata"] or "{}")
+                asset_data = original_path.read_bytes()
                 asset_payloads[new_id] = (
                     {
                         **asset_metadata,
@@ -1160,8 +1161,9 @@ def export_package(
                         "path": asset_path,
                         "mediaType": asset_row["media_type"],
                         "sha256": asset_row["sha256"],
+                        "size": len(asset_data),
                     },
-                    original_path.read_bytes(),
+                    asset_data,
                 )
         for child in value.values():
             register_assets(child, package_id_hint, version_hint, paper_key, mapping)

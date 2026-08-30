@@ -309,6 +309,8 @@ class EsqRoundTripTests(unittest.TestCase):
             names = set(archive.namelist())
             self.assertIn("assets/index.json", names)
             self.assertTrue(any(name.startswith("assets/images/") for name in names))
+            declared = json.loads(archive.read("assets/index.json"))["assets"][0]
+            self.assertEqual(declared["size"], len(archive.read(declared["path"])))
 
         malicious = self.temp_root / "malicious.esq"
         with zipfile.ZipFile(malicious, "w") as archive:
