@@ -32,15 +32,22 @@ def labeling_status(
     connection: sqlite3.Connection,
     year: int | None = None,
     paper_ids: list[int] | None = None,
+    question_bank_profile_id: int | None = None,
+    run_id: str = "",
 ) -> dict[str, Any]:
+    run_context = _load_run_context(connection, run_id) if run_id.strip() else None
+    if run_context:
+        year = run_context["year"]
+        paper_ids = run_context["paper_ids"]
+        question_bank_profile_id = run_context["question_bank_profile_id"]
     params: list[Any] = []
     conditions: list[str] = [
         "p.deleted_at IS NULL",
         "u.unit_type <> 'listening'",
     ]
-    if not paper_ids:
+    if not paper_ids or question_bank_profile_id is not None:
         conditions.append("p.profile_id = ?")
-        params.append(get_active_profile_id(connection))
+        params.append(_resolve_question_bank_profile_id(connection, question_bank_profile_id))
     if year is not None:
         conditions.append("p.year = ?")
         params.append(year)
@@ -67,15 +74,20 @@ def labeling_status(
         params,
     ).fetchone()
     if normalized_paper_ids:
+        year_params = list(normalized_paper_ids)
+        profile_clause = ""
+        if question_bank_profile_id is not None:
+            profile_clause = " AND profile_id = ?"
+            year_params.append(_resolve_question_bank_profile_id(connection, question_bank_profile_id))
         years = [
             item["year"]
             for item in connection.execute(
                 f"""
                 SELECT DISTINCT year FROM papers
-                WHERE id IN ({','.join('?' for _ in normalized_paper_ids)})
+                WHERE id IN ({','.join('?' for _ in normalized_paper_ids)}){profile_clause}
                 ORDER BY year DESC
                 """,
-                normalized_paper_ids,
+                year_params,
             ).fetchall()
         ]
     else:
@@ -87,7 +99,7 @@ def labeling_status(
                 WHERE profile_id = ? AND deleted_at IS NULL
                 ORDER BY year DESC
                 """,
-                (get_active_profile_id(connection),),
+                (_resolve_question_bank_profile_id(connection, question_bank_profile_id),),
             ).fetchall()
         ]
     total = int(row["total"] or 0)
@@ -110,6 +122,124 @@ def _effective_run_id(value: str) -> str:
     return cleaned[:80] if cleaned else uuid.uuid4().hex
 
 
+def _normalize_paper_ids(paper_ids: list[int] | None) -> list[int]:
+    return sorted({int(value) for value in paper_ids or [] if int(value) > 0})
+
+
+def _resolve_question_bank_profile_id(
+    connection: sqlite3.Connection,
+    question_bank_profile_id: int | None,
+) -> int:
+    if question_bank_profile_id is None:
+        return get_active_profile_id(connection)
+    profile_id = int(question_bank_profile_id)
+    exists = connection.execute(
+        "SELECT 1 FROM question_bank_profiles WHERE id = ? AND deleted_at IS NULL",
+        (profile_id,),
+    ).fetchone()
+    if not exists:
+        raise ValueError("题库配置不存在或已在回收站")
+    return profile_id
+
+
+def _load_run_context(
+    connection: sqlite3.Connection,
+    run_id: str,
+) -> dict[str, Any] | None:
+    row = connection.execute(
+        "SELECT * FROM question_label_runs WHERE run_id = ?",
+        (run_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        stored_paper_ids = json.loads(row["paper_ids"] or "[]")
+    except (TypeError, ValueError):
+        stored_paper_ids = []
+    return {
+        "run_id": str(row["run_id"]),
+        "question_bank_profile_id": int(row["question_bank_profile_id"]),
+        "scope_kind": str(row["scope_kind"] or "all"),
+        "year": int(row["year"]) if row["year"] is not None else None,
+        "paper_ids": _normalize_paper_ids(stored_paper_ids),
+        "overwrite_unlocked": bool(row["overwrite_unlocked"]),
+        "status": str(row["status"] or "running"),
+    }
+
+
+def _ensure_run_context(
+    connection: sqlite3.Connection,
+    *,
+    run_id: str,
+    year: int | None,
+    paper_ids: list[int] | None,
+    overwrite_unlocked: bool,
+    question_bank_profile_id: int | None,
+) -> tuple[str, dict[str, Any]]:
+    effective_run_id = _effective_run_id(run_id)
+    existing = _load_run_context(connection, effective_run_id)
+    if existing:
+        connection.execute(
+            "UPDATE question_label_runs SET status = 'running', updated_at = CURRENT_TIMESTAMP WHERE run_id = ? AND status IN ('paused', 'failed')",
+            (effective_run_id,),
+        )
+        connection.commit()
+        return effective_run_id, existing
+    normalized_paper_ids = _normalize_paper_ids(paper_ids)
+    profile_id = _resolve_question_bank_profile_id(connection, question_bank_profile_id)
+    if normalized_paper_ids:
+        placeholders = ",".join("?" for _ in normalized_paper_ids)
+        row = connection.execute(
+            f"SELECT COUNT(*) AS count FROM papers WHERE id IN ({placeholders}) AND profile_id = ? AND deleted_at IS NULL",
+            [*normalized_paper_ids, profile_id],
+        ).fetchone()
+        if int(row["count"] or 0) != len(normalized_paper_ids):
+            raise ValueError("标注试卷不属于当前绑定的题库配置")
+    scope_kind = "papers" if normalized_paper_ids else ("year" if year is not None else "all")
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO question_label_runs
+            (run_id, question_bank_profile_id, scope_kind, year, paper_ids, overwrite_unlocked, status)
+        VALUES (?, ?, ?, ?, ?, ?, 'running')
+        """,
+        (
+            effective_run_id,
+            profile_id,
+            scope_kind,
+            year,
+            json.dumps(normalized_paper_ids),
+            int(overwrite_unlocked),
+        ),
+    )
+    connection.commit()
+    context = _load_run_context(connection, effective_run_id)
+    if context is None:
+        raise RuntimeError("无法创建智能标注运行上下文")
+    return effective_run_id, context
+
+
+def _update_run_status(
+    connection: sqlite3.Connection,
+    run_id: str,
+    status: str,
+    error: str = "",
+) -> None:
+    finished_at = "CURRENT_TIMESTAMP" if status in {"done", "failed", "cancelled"} else "NULL"
+    connection.execute(
+        f"UPDATE question_label_runs SET status = ?, last_error = ?, updated_at = CURRENT_TIMESTAMP, finished_at = {finished_at} WHERE run_id = ?",
+        (status, error[:1000], run_id),
+    )
+    connection.commit()
+
+
+def pause_label_run(connection: sqlite3.Connection, run_id: str) -> dict[str, Any]:
+    context = _load_run_context(connection, run_id.strip())
+    if context is None:
+        raise LookupError("智能标注运行不存在")
+    _update_run_status(connection, context["run_id"], "paused")
+    return {"run_id": context["run_id"], "status": "paused"}
+
+
 def _eligible_condition(overwrite_unlocked: bool) -> str:
     return "(l.question_id IS NULL OR l.locked = 0)" if overwrite_unlocked else "l.question_id IS NULL"
 
@@ -121,6 +251,7 @@ def _next_unit(
     paper_ids: list[int] | None,
     overwrite_unlocked: bool,
     run_id: str,
+    question_bank_profile_id: int,
 ) -> sqlite3.Row | None:
     params: list[Any] = [run_id]
     conditions = [
@@ -131,11 +262,11 @@ def _next_unit(
     ]
     if not paper_ids:
         conditions.append("p.profile_id = ?")
-        params.append(get_active_profile_id(connection))
+        params.append(question_bank_profile_id)
     if year is not None:
         conditions.append("p.year = ?")
         params.append(year)
-    normalized_paper_ids = sorted({int(value) for value in paper_ids or [] if int(value) > 0})
+    normalized_paper_ids = _normalize_paper_ids(paper_ids)
     if normalized_paper_ids:
         conditions.append(
             f"p.id IN ({','.join('?' for _ in normalized_paper_ids)})"
@@ -332,7 +463,7 @@ def _save_labels(
                      attention_points, vocabulary_demand, context_dependency,
                      grammar_dependency, confidence, locked, user_edited,
                      model_name, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(question_id) DO UPDATE SET
                     primary_skill = excluded.primary_skill,
                     secondary_skills = excluded.secondary_skills,
@@ -342,6 +473,7 @@ def _save_labels(
                     context_dependency = excluded.context_dependency,
                     grammar_dependency = excluded.grammar_dependency,
                     confidence = excluded.confidence,
+                    locked = 1,
                     model_name = excluded.model_name,
                     label_version = question_ai_labels.label_version + 1,
                     updated_at = CURRENT_TIMESTAMP
@@ -395,28 +527,48 @@ def label_next_unit(
     overwrite_unlocked: bool,
     run_id: str = "",
     profile_id: int | None = None,
+    question_bank_profile_id: int | None = None,
     model: str | None = None,
     max_tokens: int | None = None,
 ) -> dict[str, Any]:
-    effective_run_id = _effective_run_id(run_id)
-    unit = _next_unit(
+    effective_run_id, run_context = _ensure_run_context(
         connection,
+        run_id=run_id,
         year=year,
         paper_ids=paper_ids,
         overwrite_unlocked=overwrite_unlocked,
+        question_bank_profile_id=question_bank_profile_id,
+    )
+    scoped_year = run_context["year"]
+    scoped_paper_ids = run_context["paper_ids"]
+    scoped_overwrite_unlocked = run_context["overwrite_unlocked"]
+    unit = _next_unit(
+        connection,
+        year=scoped_year,
+        paper_ids=scoped_paper_ids,
+        overwrite_unlocked=scoped_overwrite_unlocked,
         run_id=effective_run_id,
+        question_bank_profile_id=run_context["question_bank_profile_id"],
     )
     if unit is None:
+        _update_run_status(connection, effective_run_id, "done")
         return {
             "done": True,
             "processed": 0,
             "run_id": effective_run_id,
-            **labeling_status(connection, year, paper_ids),
+            "question_bank_profile_id": run_context["question_bank_profile_id"],
+            **labeling_status(
+                connection,
+                scoped_year,
+                scoped_paper_ids,
+                question_bank_profile_id=run_context["question_bank_profile_id"],
+                run_id=effective_run_id,
+            ),
         }
     questions = _question_payload(
         connection,
         unit["id"],
-        overwrite_unlocked=overwrite_unlocked,
+        overwrite_unlocked=scoped_overwrite_unlocked,
         run_id=effective_run_id,
     )
     if not questions:
@@ -426,7 +578,14 @@ def label_next_unit(
             "run_id": effective_run_id,
             "unit_id": unit["id"],
             "unit_title": f"{unit['year']} 年 {unit['title']}",
-            **labeling_status(connection, year, paper_ids),
+            "question_bank_profile_id": run_context["question_bank_profile_id"],
+            **labeling_status(
+                connection,
+                scoped_year,
+                scoped_paper_ids,
+                question_bank_profile_id=run_context["question_bank_profile_id"],
+                run_id=effective_run_id,
+            ),
         }
     profile = get_ai_profile(connection, profile_id)
     processed = 0
@@ -452,9 +611,16 @@ def label_next_unit(
         "done": False,
         "processed": processed,
         "run_id": effective_run_id,
+        "question_bank_profile_id": run_context["question_bank_profile_id"],
         "unit_id": unit["id"],
         "unit_title": f"{unit['year']} 年 {unit['title']}",
-        **labeling_status(connection, year, paper_ids),
+        **labeling_status(
+            connection,
+            scoped_year,
+            scoped_paper_ids,
+            question_bank_profile_id=run_context["question_bank_profile_id"],
+            run_id=effective_run_id,
+        ),
     }
 
 

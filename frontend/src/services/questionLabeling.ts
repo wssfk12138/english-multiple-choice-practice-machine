@@ -11,6 +11,8 @@ export type LabelStatus = {
   review_pending: number
   remaining: number
   percentage: number
+  question_bank_profile_id?: number
+  run_id?: string
 }
 
 export type LabelScope = {
@@ -18,6 +20,7 @@ export type LabelScope = {
   title: string
   year: number | null
   paperIds: number[]
+  questionBankProfileId: number
 }
 
 type LabelingState = {
@@ -50,20 +53,25 @@ function normalizedScope(scope: LabelScope): LabelScope {
 }
 
 function scopeKey(scope: LabelScope) {
-  return JSON.stringify([scope.kind, scope.year, normalizedScope(scope).paperIds])
+  return JSON.stringify([scope.kind, scope.year, scope.questionBankProfileId, normalizedScope(scope).paperIds])
 }
 
-function statusQuery(scope: LabelScope) {
+function statusQuery(scope: LabelScope, runId = '') {
   const query = new URLSearchParams()
   if (scope.year !== null) query.set('year', String(scope.year))
   if (scope.paperIds.length) query.set('paper_ids', scope.paperIds.join(','))
+  if (scope.questionBankProfileId > 0) query.set('question_bank_profile_id', String(scope.questionBankProfileId))
+  if (runId) query.set('run_id', runId)
   const suffix = query.toString()
   return suffix ? `?${suffix}` : ''
 }
 
 export async function loadQuestionLabelingStatus(scope: LabelScope) {
   const nextScope = normalizedScope(scope)
-  const status = await get<LabelStatus>(`/ai/question-labels/status${statusQuery(nextScope)}`)
+  const sameRunningScope = questionLabelingState.isRunning
+    && questionLabelingState.scope
+    && scopeKey(questionLabelingState.scope) === scopeKey(nextScope)
+  const status = await get<LabelStatus>(`/ai/question-labels/status${statusQuery(nextScope, sameRunningScope ? questionLabelingState.runId : '')}`)
   if (!questionLabelingState.isRunning || scopeKey(questionLabelingState.scope || nextScope) === scopeKey(nextScope)) {
     questionLabelingState.scope = nextScope
     questionLabelingState.status = status
@@ -95,11 +103,13 @@ export async function startQuestionLabeling(
         paper_ids: nextScope.paperIds,
         overwrite_unlocked: overwriteUnlocked,
         run_id: questionLabelingState.runId,
+        question_bank_profile_id: nextScope.questionBankProfileId,
       })
       if (loopId !== activeLoop) return
       questionLabelingState.runId = result.run_id || questionLabelingState.runId
       questionLabelingState.status = result
       if (questionLabelingState.isPausing) {
+        await post(`/ai/question-labels/runs/${encodeURIComponent(questionLabelingState.runId)}/pause`, {})
         questionLabelingState.isRunning = false
         questionLabelingState.isPausing = false
         questionLabelingState.message = '已暂停。再次开始时会从下一篇未完成材料继续。'
