@@ -39,8 +39,8 @@ class BundledQuestionBankTests(unittest.TestCase):
         initialize_database()
         first = install_bundled_question_banks()
         self.assertEqual([item["status"] for item in first], ["installed", "installed"])
-        self.assertEqual([item["questionCount"] for item in first], [765, 720])
-        self.assertEqual([item["labelsImported"] for item in first], [765, 720])
+        self.assertEqual([item["questionCount"] for item in first], [805, 720])
+        self.assertEqual([item["labelsImported"] for item in first], [360, 320])
 
         with connect() as connection:
             profiles = {
@@ -49,7 +49,7 @@ class BundledQuestionBankTests(unittest.TestCase):
                     "SELECT id, name FROM question_bank_profiles WHERE deleted_at IS NULL"
                 )
             }
-            expected = {"考研英语一": (17, 765), "考研英语二": (16, 720)}
+            expected = {"考研英语一": (18, 805), "考研英语二": (16, 720)}
             for profile_name, (paper_count, question_count) in expected.items():
                 profile_id = profiles[profile_name]
                 actual_papers = connection.execute(
@@ -91,7 +91,7 @@ class BundledQuestionBankTests(unittest.TestCase):
                     row["name"]: (int(row["total"]), int(row["locked"]))
                     for row in label_counts
                 },
-                {"考研英语一": (765, 90), "考研英语二": (720, 720)},
+                {"考研英语一": (360, 360), "考研英语二": (320, 320)},
             )
 
         second = install_bundled_question_banks()
@@ -100,8 +100,8 @@ class BundledQuestionBankTests(unittest.TestCase):
             ["already_installed", "already_installed"],
         )
         with connect() as connection:
-            self.assertEqual(connection.execute("SELECT COUNT(*) AS count FROM papers").fetchone()["count"], 33)
-            self.assertEqual(connection.execute("SELECT COUNT(*) AS count FROM questions").fetchone()["count"], 1485)
+            self.assertEqual(connection.execute("SELECT COUNT(*) AS count FROM papers").fetchone()["count"], 34)
+            self.assertEqual(connection.execute("SELECT COUNT(*) AS count FROM questions").fetchone()["count"], 1525)
 
     def test_existing_user_paper_is_not_replaced(self) -> None:
         from backend.app.database import connect, initialize_database
@@ -142,7 +142,7 @@ class BundledQuestionBankTests(unittest.TestCase):
                     "SELECT COUNT(*) AS count FROM papers WHERE profile_id = ?",
                     (profile_id,),
                 ).fetchone()["count"],
-                17,
+                18,
             )
 
 
