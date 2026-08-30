@@ -40,3 +40,7 @@ design-system/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Local agent working notes (not for publication)
+AGENTS.md
+PROJECT_NOTES.md

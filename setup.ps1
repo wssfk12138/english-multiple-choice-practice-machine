@@ -18,21 +18,50 @@ if (-not (Test-Path -LiteralPath ".venv")) {
 
 & ".\.venv\Scripts\python.exe" -m pip install -r requirements.txt
 
-$corepack = Get-Command "corepack.cmd" -ErrorAction SilentlyContinue
-if (-not $corepack) {
-    $corepack = Get-Command "corepack.exe" -ErrorAction SilentlyContinue
+$distIndex = Join-Path $projectRoot "frontend\dist\index.html"
+if (Test-Path -LiteralPath $distIndex) {
+    # 发布包自带已构建的前端；仅源码开发时才需要 Node 构建。
+    Write-Host "Found prebuilt frontend (frontend\dist); skipping pnpm build."
 }
-if (-not $corepack) {
-    throw "Node.js with Corepack is required. Install Node.js and run setup.ps1 again."
+else {
+    $corepack = Get-Command "corepack.cmd" -ErrorAction SilentlyContinue
+    if (-not $corepack) {
+        $corepack = Get-Command "corepack.exe" -ErrorAction SilentlyContinue
+    }
+    if (-not $corepack) {
+        throw "Node.js with Corepack is required. Install Node.js and run setup.ps1 again."
+    }
+
+    Push-Location frontend
+    try {
+        & $corepack.Source pnpm install --frozen-lockfile
+        & $corepack.Source pnpm run build
+    }
+    finally {
+        Pop-Location
+    }
 }
 
-Push-Location frontend
-try {
-    & $corepack.Source pnpm install --frozen-lockfile
-    & $corepack.Source pnpm run build
-}
-finally {
-    Pop-Location
+$pythonw = Join-Path $projectRoot ".venv\Scripts\pythonw.exe"
+$launcher = Join-Path $projectRoot "run_app.py"
+$icon = Join-Path $projectRoot "frontend\public\assets\icons\brand-mark.ico"
+$desktop = [Environment]::GetFolderPath("Desktop")
+$shortcutPath = Join-Path $desktop "英语刷题机.lnk"
+
+foreach ($requiredPath in @($pythonw, $launcher, $icon)) {
+    if (-not (Test-Path -LiteralPath $requiredPath)) {
+        throw "Desktop shortcut dependency not found: $requiredPath"
+    }
 }
 
-Write-Host "Setup complete. Run start.ps1 to launch English Practice Machine."
+$shell = New-Object -ComObject WScript.Shell
+$shortcut = $shell.CreateShortcut($shortcutPath)
+$shortcut.TargetPath = $pythonw
+$shortcut.Arguments = '"' + $launcher + '"'
+$shortcut.WorkingDirectory = $projectRoot
+$shortcut.IconLocation = $icon + ",0"
+$shortcut.WindowStyle = 7
+$shortcut.Description = "英语刷题机"
+$shortcut.Save()
+
+Write-Host "Setup complete. Desktop shortcut: $shortcutPath"

@@ -1,0 +1,27 @@
+{
+ "catalogVersion": 1,
+ "packages": [
+  {
+   "packageId": "wssfk.cet4.complete",
+   "title": "大学英语四级（CET-4） 完整真题题库",
+   "contentVersion": "1.2.0",
+   "fileName": "cet4-complete-v1.2.0.esq",
+   "downloadUrl": "https://github.com/wssfk12138/english-multiple-choice-practice-machine/releases/download/question-banks-v1.2.0/cet4-complete-v1.2.0.esq",
+   "sha256": "976842e6cfd96c68178ab4a30cacaf10c435d53a19218b05a4d0142279d03f98",
+   "size": 429043776,
+   "license": "仅在个人学习范围使用；考生回忆整理版，再分发前请确认原始题目与音频许可。",
+   "years": [2017, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
+  },
+  {
+   "packageId": "wssfk.cet6.complete",
+   "title": "大学英语六级（CET-6） 完整真题题库",
+   "contentVersion": "1.2.0",
+   "fileName": "cet6-complete-v1.2.0.esq",
+   "downloadUrl": "https://github.com/wssfk12138/english-multiple-choice-practice-machine/releases/download/question-banks-v1.2.0/cet6-complete-v1.2.0.esq",
+   "sha256": "f7c5a8b9fe0e2c1cf614a4c1eddef5244e4ca6fc456f98824923b3a8ac81a250",
+   "size": 844861464,
+   "license": "仅在个人学习范围使用；考生回忆整理版，再分发前请确认原始题目与音频许可。",
+   "years": [2020, 2021, 2022, 2023, 2024, 2025, 2026]
+  }
+ ]
+}

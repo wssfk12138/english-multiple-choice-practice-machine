@@ -1,0 +1,117 @@
+name: Windows Release
+
+# 手动触发的发布流水线：构建前端、打包 zip、生成 windows-update.json
+# 并创建 GitHub Release（含 zip 与更新清单两个资产）。
+# 发布属于对外动作，只允许维护者按清单逐项确认后手动运行。
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release 标签（例如 v0.1.0）"
+        required: true
+      version_name:
+        description: "versionName（例如 0.1.0）"
+        required: true
+        default: "0.1.0"
+      version_code:
+        description: "versionCode（每次发布递增）"
+        required: true
+        default: "1"
+      release_notes:
+        description: "更新说明（写入 windows-update.json）"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build
+
+      - name: Assemble package
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP "package\english-practice-machine"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          $items = @(
+            "backend", "frontend\dist", "run_app.py", "start.ps1", "setup.ps1",
+            "requirements.txt", "README.md", "README.en.md", "LICENSE", "NOTICE.md", "AUTHORS.md"
+          )
+          foreach ($item in $items) {
+            $source = Join-Path $item ""
+            if (Test-Path $item -PathType Container) {
+              robocopy $item (Join-Path $stage $item) /E /NFL /NDL /NJH /NJS | Out-Null
+            } else {
+              Copy-Item $item $stage
+            }
+          }
+          Compress-Archive -Path $stage -DestinationPath (Join-Path $env:RUNNER_TEMP "english-practice-machine-windows.zip")
+
+      - name: Generate update manifest
+        shell: pwsh
+        env:
+          TAG: ${{ inputs.tag }}
+          VERSION_NAME: ${{ inputs.version_name }}
+          VERSION_CODE: ${{ inputs.version_code }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        run: |
+          $zip = Get-Item (Join-Path $env:RUNNER_TEMP "english-practice-machine-windows.zip")
+          $sha = (Get-FileHash $zip.FullName -Algorithm SHA256).Hash.ToLower()
+          $repo = "${{ github.repository }}"
+          $manifest = [ordered]@{
+            schemaVersion = 1
+            windows = [ordered]@{
+              versionName = $env:VERSION_NAME
+              versionCode = [int]$env:VERSION_CODE
+              packageUrl = "https://github.com/$repo/releases/download/$($env:TAG)/$($zip.Name)"
+              packageSize = $zip.Length
+              packageSha256 = $sha
+              packageType = "zip"
+              releaseNotes = $env:RELEASE_NOTES
+            }
+          }
+          $manifest | ConvertTo-Json -Depth 5 | Out-File (Join-Path $env:RUNNER_TEMP "windows-update.json") -Encoding utf8NoBOM
+          "package=$($zip.Name)" | Out-File $env:GITHUB_OUTPUT -Append
+          "sha256=$sha" | Out-File $env:GITHUB_OUTPUT -Append
+          "size=$($zip.Length)" | Out-File $env:GITHUB_OUTPUT -Append
+
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          VERSION_NAME: ${{ inputs.version_name }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        run: |
+          $notes = if ($env:RELEASE_NOTES) { $env:RELEASE_NOTES } else { "英语刷题机 Windows 公测版 $env:VERSION_NAME" }
+          gh release create "$env:TAG" `
+            (Join-Path $env:RUNNER_TEMP "english-practice-machine-windows.zip") `
+            (Join-Path $env:RUNNER_TEMP "windows-update.json") `
+            --title "英语刷题机 $env:VERSION_NAME" `
+            --notes "$notes"
+
+      - name: Summary
+        shell: pwsh
+        run: |
+          "Release ${{ inputs.tag }} 已创建。" | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          "SHA-256: ${{ steps['Generate update manifest'].outputs.sha256 }}" | Out-File $env:GITHUB_STEP_SUMMARY -Append
