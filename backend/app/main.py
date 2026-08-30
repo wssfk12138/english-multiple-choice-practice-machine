@@ -19,6 +19,8 @@ from .routers import (
     practice,
     question_bank_profiles,
     question_banks,
+    remote_question_banks,
+    updates,
     vocabulary,
     wrong,
 )
@@ -67,6 +69,8 @@ app.include_router(wrong.router, prefix="/api")
 app.include_router(imports.router, prefix="/api")
 app.include_router(question_banks.router, prefix="/api")
 app.include_router(question_bank_profiles.router, prefix="/api")
+app.include_router(remote_question_banks.router, prefix="/api")
+app.include_router(updates.router, prefix="/api")
 app.include_router(ai.router, prefix="/api")
 app.include_router(vocabulary.router, prefix="/api")
 

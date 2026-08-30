@@ -10,6 +10,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vue-tsc --noEmit -p tsconfig.app.json && vite build",
+    "test:diagnostics": "node --experimental-strip-types tests/diagnostics-sanitizer.mjs",
+    "test:remote-question-banks": "cd .. && python -m unittest tests.test_question_bank_catalog",
     "preview": "vite preview"
   },
   "dependencies": {

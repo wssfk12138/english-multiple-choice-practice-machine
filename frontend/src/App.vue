@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { BookMarked, BookOpenText, Brain, FileUp, Home, Library, MessageCircle, Moon, Settings, Sun } from 'lucide-vue-next'
+import { BookMarked, BookOpenText, Brain, CircleHelp, CloudDownload, FileUp, Home, Library, MessageCircle, Moon, RefreshCw, Settings, Sun } from 'lucide-vue-next'
 import { onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 
@@ -38,10 +38,13 @@ onMounted(() => {
         <RouterLink to="/wrong"><Brain :size="19" aria-hidden="true" /><span>错题本</span></RouterLink>
         <RouterLink to="/vocabulary"><BookMarked :size="19" aria-hidden="true" /><span>单词本</span></RouterLink>
         <RouterLink to="/imports"><FileUp :size="19" aria-hidden="true" /><span>导入题库</span></RouterLink>
+        <RouterLink to="/remote-question-banks"><CloudDownload :size="19" aria-hidden="true" /><span>远程题库</span></RouterLink>
         <RouterLink to="/assistant">
           <MessageCircle :size="19" aria-hidden="true" /><span>AI 学习助手</span>
         </RouterLink>
         <RouterLink to="/settings"><Settings :size="19" aria-hidden="true" /><span>模型与设置</span></RouterLink>
+        <RouterLink to="/updates"><RefreshCw :size="19" aria-hidden="true" /><span>更新中心</span></RouterLink>
+        <RouterLink to="/help"><CircleHelp :size="19" aria-hidden="true" /><span>帮助与反馈</span></RouterLink>
       </nav>
       <div class="sidebar-note">
         <BookOpenText :size="18" />
@@ -57,3 +60,9 @@ onMounted(() => {
     </main>
   </div>
 </template>
+
+<style scoped>
+@media (max-width: 820px) {
+  .sidebar nav { grid-template-columns: repeat(10, minmax(0, 1fr)); }
+}
+</style>

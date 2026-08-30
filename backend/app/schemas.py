@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PracticeCreate(BaseModel):
@@ -14,6 +14,12 @@ class PracticeCreate(BaseModel):
     selection_scope: Literal["unit", "paper_unit_type"] = "unit"
     count: int = 1
     shuffle_options: bool = True
+
+
+class UpdateOpenRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    file_name: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 class QuestionBankProfileCreate(BaseModel):
@@ -83,11 +89,26 @@ class AiProfileTestRequest(BaseModel):
     model: str | None = None
 
 
+class QuestionBankCatalogSettingsWrite(BaseModel):
+    question_bank_catalog_url: str = Field(default="", max_length=2048)
+
+
+class QuestionBankDownloadRequest(BaseModel):
+    package_id: str = Field(min_length=1, max_length=80)
+    content_version: str = Field(min_length=1, max_length=80)
+
+
+class AiChatAttachment(BaseModel):
+    name: str = Field(default="图片", max_length=80)
+    data_url: str
+
+
 class AiChatRequest(BaseModel):
     conversation_id: int | None = None
     profile_id: int
     model: str
-    message: str = Field(min_length=1, max_length=20000)
+    message: str = Field(default="", max_length=20000)
+    attachments: list[AiChatAttachment] = Field(default_factory=list)
 
 
 class AiAnalyzeRequest(BaseModel):
@@ -101,6 +122,7 @@ class AiLabelBatchRequest(BaseModel):
     paper_ids: list[int] = Field(default_factory=list, max_length=100)
     overwrite_unlocked: bool = False
     run_id: str = Field(default="", max_length=80)
+    question_bank_profile_id: int | None = Field(default=None, gt=0)
     profile_id: int | None = None
     model: str = ""
     max_tokens: int | None = Field(default=None, ge=0)

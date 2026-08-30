@@ -8,6 +8,9 @@ import SettingsView from './views/SettingsView.vue'
 import WrongView from './views/WrongView.vue'
 import VocabularyView from './views/VocabularyView.vue'
 import TrashView from './views/TrashView.vue'
+import HelpView from './views/HelpView.vue'
+import RemoteQuestionBanksView from './views/RemoteQuestionBanksView.vue'
+import UpdatesView from './views/UpdatesView.vue'
 
 export default createRouter({
   history: createWebHistory(),
@@ -21,5 +24,8 @@ export default createRouter({
     { path: '/assistant', component: AiAssistant },
     { path: '/settings', component: SettingsView },
     { path: '/trash', component: TrashView },
+    { path: '/help', component: HelpView },
+    { path: '/remote-question-banks', component: RemoteQuestionBanksView },
+    { path: '/updates', component: UpdatesView },
   ],
 })
