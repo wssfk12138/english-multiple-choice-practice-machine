@@ -67,6 +67,40 @@ def _convert_legacy(source: Path) -> Path:
     return destination
 
 
+def _pdf_blocks_by_coordinates(path: Path) -> list[str]:
+    """Rebuild PDF text lines from word coordinates when the text layer has
+    fragmented layout (common in copyable CET papers).  Falls back to a
+    no-op list when pdfplumber is unavailable."""
+    try:
+        import pdfplumber
+    except Exception:
+        return []
+    rebuilt: list[str] = []
+    with pdfplumber.open(str(path)) as pdf:
+        for page in pdf.pages:
+            words = page.extract_words(keep_blank_chars=False)
+            lines: dict[int, list[tuple[float, str]]] = {}
+            for word in words:
+                key = round(word["top"] / 5)
+                lines.setdefault(key, []).append((word["x0"], word["text"]))
+            ordered = [
+                " ".join(text for _, text in sorted(items))
+                for _, items in sorted(lines.items())
+            ]
+            merged: list[str] = []
+            for line in ordered:
+                if (
+                    merged
+                    and re.search(r"(?:Part|Section)\s*$", merged[-1])
+                    and re.search(r"^[ⅠIIVABC1-4]\b", line)
+                ):
+                    merged[-1] += " " + line
+                else:
+                    merged.append(line)
+            rebuilt.extend(cleaned for line in merged if (cleaned := clean_text(line)))
+    return rebuilt
+
+
 def detect_format(path: Path) -> str:
     if path.suffix.lower() == ".pdf":
         return "text_pdf"
@@ -206,6 +240,19 @@ def extract_blocks(path: Path) -> tuple[list[str], str, Path | None]:
                 for line in page_text.splitlines()
                 if (cleaned := clean_text(line))
             )
+        joined = "\n".join(blocks)
+        if (
+            re.search(r"Reading\s+Comprehension", joined) is None
+            and re.search(r"Comprehension\s*\(\s*\d+\s*minutes", joined) is not None
+        ):
+            # Some copyable CET PDFs split the reading header into separate
+            # layout fragments (e.g. ``Comprehension (40 minutes)`` and
+            # ``Pa rt III Reading``), which breaks section detection.  Rebuild
+            # line order from word coordinates so the parser sees the same
+            # headers a human would.
+            rebuilt = _pdf_blocks_by_coordinates(path)
+            if rebuilt and re.search(r"Reading\s+Comprehension", "\n".join(rebuilt)):
+                blocks = rebuilt
         if len(re.sub(r"\s+", "", "\n".join(blocks))) < 100:
             raise ValueError("PDF 未检测到可靠文字层，请改用 Word 或先进行 OCR")
         return blocks, detected, None
@@ -292,9 +339,10 @@ def create_docx_block_fragment(
             shutil.rmtree(converted.parent, ignore_errors=True)
 
 
-def _find_index(blocks: list[str], pattern: str, start: int = 0) -> int:
+def _find_index(blocks: list[str], pattern: str, start: int = 0, end: int | None = None) -> int:
     rx = re.compile(pattern, re.I)
-    for index in range(start, len(blocks)):
+    stop = end if end is not None else len(blocks)
+    for index in range(start, stop):
         if rx.search(blocks[index]):
             return index
     return -1
@@ -540,7 +588,20 @@ def extract_pdf_answer_key(path: Path) -> dict[int, str]:
     return _extract_answers_from_text("\n".join(plain_pages))
 
 
-def extract_answer_attachment(path: Path) -> tuple[dict[int, str], dict[str, Any]]:
+def _cet_answer_key_is_reliable(answers: dict[int, str]) -> bool:
+    """Reject sparse/garbled PDF text that merely resembles CET answers."""
+    if len(answers) < 25:
+        return False
+    for number, answer in answers.items():
+        allowed = "ABCDEFGHIJKLMNOPQR" if 26 <= number <= 45 else "ABCD"
+        if answer not in allowed:
+            return False
+    return True
+
+
+def extract_answer_attachment(
+    path: Path, *, exam_type: str = ""
+) -> tuple[dict[int, str], dict[str, Any]]:
     suffix = path.suffix.lower()
     if suffix == ".pdf":
         reader = PdfReader(str(path))
@@ -552,10 +613,13 @@ def extract_answer_attachment(path: Path) -> tuple[dict[int, str], dict[str, Any
                 "message": "答案 PDF 未检测到可靠文字层，请人工录入答案",
             }
         answers = extract_pdf_answer_key(path)
-        if not answers:
+        if not answers or (
+            exam_type in {"cet4", "cet6"}
+            and not _cet_answer_key_is_reliable(answers)
+        ):
             return {}, {
                 "status": "manual_required",
-                "message": "答案 PDF 未识别出可靠的客观题答案，请人工录入",
+                "message": "答案 PDF 文字层乱码或答案覆盖不足，请通过 OCR/人工校对录入",
             }
         return answers, {
             "status": "parsed",
@@ -568,7 +632,10 @@ def extract_answer_attachment(path: Path) -> tuple[dict[int, str], dict[str, Any
     finally:
         if converted:
             shutil.rmtree(converted.parent, ignore_errors=True)
-    if not answers:
+    if not answers or (
+        exam_type in {"cet4", "cet6"}
+        and not _cet_answer_key_is_reliable(answers)
+    ):
         return {}, {
             "status": "manual_required",
             "message": "答案 Word 未识别出可靠的客观题答案，请人工录入",
@@ -843,6 +910,468 @@ def _parse_reading(blocks: list[str], answers: dict[int, str]) -> list[dict[str,
                 "questions": questions,
             }
         )
+    return units
+
+
+CET_CHOICE_MARK_RE = re.compile(
+    r"(?<![A-Za-z])([A-D])\s*(?:\)|\]|）|[.．、])\s*", re.I
+)
+CET_BANK_MARK_RE = re.compile(r"([A-O0])\s*(?:\)|\]|）|[.．、])\s*", re.I)
+
+
+def _cet_choice_groups(blocks: list[str], expected_count: int) -> list[list[dict[str, str]]]:
+    """Recover sequential A-D groups from CET Word exports.
+
+    Several source files lose the first question number in a listening group,
+    and occasionally lose one option label.  Word two-column exports also put
+    ``A) ... C) ...`` on one line with ``B) ... D) ...`` on the next.  Label
+    slots are filled per line (overwriting the same slot) and a group is
+    emitted once A-D are all present, so neither interleaved columns nor a
+    missing label in one line can shift the question boundaries.
+    """
+    groups: list[list[dict[str, str]]] = []
+    current: dict[str, str] = {}
+
+    def flush() -> None:
+        nonlocal current
+        if all(label in current for label in "ABCD"):
+            groups.append(
+                [{"key": label, "content": current[label]} for label in "ABCD"]
+            )
+        current = {}
+
+    section_blocks = [clean_text(raw) for raw in blocks]
+    has_questions = any(
+        re.search(r"^Questions?\b", text, re.I)
+        for text in section_blocks
+        if text
+    )
+    started = not has_questions
+    for text in section_blocks:
+        if not text or re.match(r"^\s*Directions?:", text, re.I):
+            continue
+        if re.search(r"^Questions?\b", text, re.I):
+            if not started:
+                started = True
+            continue
+        if not started:
+            continue
+        text = re.sub(r"^\s*\d+\s*[\.、．)]\s*", "", text)
+        matches = list(CET_CHOICE_MARK_RE.finditer(text))
+        if not matches:
+            continue
+        prefix = clean_text(text[: matches[0].start()])
+        if prefix and current:
+            expected_label = next(
+                (label for label in "ABCD" if label not in current), ""
+            )
+            if expected_label and expected_label < matches[0].group(1).upper():
+                current[expected_label] = prefix
+        for index, match in enumerate(matches):
+            label = match.group(1).upper()
+            start = match.end()
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+            content = clean_text(text[start:end])
+            if label == "A" and "A" in current:
+                flush()
+            current[label] = content
+    flush()
+    return groups[:expected_count]
+
+def _cet_section_indexes(blocks: list[str]) -> tuple[int, int, int, int, int]:
+    listening = _find_index(blocks, r"Listening\s+Comprehension")
+    reading = _find_index(blocks, r"Reading\s+Comprehension")
+    # 部分试卷版式把 "Section A" 放在 "Reading Comprehension" 标题行之上
+    # （例如 Section A / Reading Comprehension / (40 minutes) 三行），
+    # 因此从 reading 标记前几行开始搜索，避免漏掉 Section A。
+    search_start = max(0, reading - 3)
+    section_a = _find_index(blocks, r"^\s*Section\s*A\s*(?:[（(][^）)]*[）)])?\s*$", search_start)
+    section_b = _find_index(blocks, r"^\s*Section\s*B\s*(?:[（(][^）)]*[）)])?\s*$", max(section_a + 1, search_start))
+    section_c = _find_index(blocks, r"^\s*Section\s*C\s*(?:[（(][^）)]*[）)])?\s*$", max(section_b + 1, search_start))
+    return listening, reading, section_a, section_b, section_c
+
+
+def _cet_listening_section_positions(blocks: list[str], listening: int, reading: int) -> list[int]:
+    """Locate listening Section A/B/C anchors strictly within [listening, reading).
+
+    Some CET papers mangle listening section titles: Section A becomes a bare
+    'A' plus a QR-code noise line, and Section C is split as a bare 'C'
+    followed by 'Section'. Searching the whole block list from the listening
+    marker would leap into the reading word-bank 'Section A' and corrupt the
+    listening option groups, so we confine the search to the listening span
+    and tolerate split/noisy titles.
+    """
+    BS = chr(92)
+    re_a = r"^" + BS + "s*Section" + BS + "s*A" + BS + "b"
+    re_a_alone = r"^" + BS + "s*A" + BS + "s*$"
+    re_b = r"^" + BS + "s*Section" + BS + "s*B" + BS + "b"
+    re_c = r"^" + BS + "s*Section" + BS + "s*C" + BS + "b"
+    re_c_alone = r"^" + BS + "s*C" + BS + "s*$"
+    re_sec = r"^" + BS + "s*Section" + BS + "b"
+    re_sec_abc = r"^" + BS + "s*Section" + BS + "s*[ABC]" + BS + "b"
+    lower_end = max(0, listening + 1)
+    upper_end = max(lower_end, reading) if reading > 0 else len(blocks)
+    anchors = []
+    for index in range(lower_end, upper_end):
+        text = clean_text(blocks[index])
+        if text and (re.match(re_a, text, re.I) or re.match(re_a_alone, text, re.I)):
+            anchors.append(("A", index))
+            break
+    for index in range(lower_end, upper_end):
+        text = clean_text(blocks[index])
+        if text and re.match(re_b, text, re.I):
+            anchors.append(("B", index))
+            break
+    for index in range(lower_end, upper_end):
+        text = clean_text(blocks[index])
+        if not text:
+            continue
+        if re.match(re_c, text, re.I):
+            anchors.append(("C", index))
+            break
+        if re.match(re_c_alone, text, re.I):
+            ahead = index + 1
+            while ahead < upper_end:
+                ahead_text = clean_text(blocks[ahead])
+                if re.match(re_sec, ahead_text, re.I):
+                    anchors.append(("C", index))
+                    break
+                if re.match(re_sec_abc, ahead_text, re.I):
+                    break
+                if ahead_text:
+                    anchors.append(("C", index))
+                    break
+                ahead += 1
+            if anchors and anchors[-1][0] == "C":
+                break
+    positions = [index for _, index in anchors]
+    positions.sort()
+    return positions
+
+
+def _parse_cet_listening(
+    blocks: list[str], answers: dict[int, str], exam_units: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    listening, reading, _, _, _ = _cet_section_indexes(blocks)
+    if listening < 0 or reading <= listening:
+        return []
+    section_starts = _cet_listening_section_positions(blocks, listening, reading)
+    template_units = [unit for unit in exam_units if unit["type"] == "listening"]
+    if len(section_starts) != len(template_units):
+        return []
+    units: list[dict[str, Any]] = []
+    for index, template in enumerate(template_units):
+        start = section_starts[index]
+        end = section_starts[index + 1] if index + 1 < len(section_starts) else reading
+        numbers = list(template["numbers"])
+        choices = _cet_choice_groups(blocks[start + 1 : end], len(numbers)) if start >= 0 else []
+        units.append(
+            {
+                "unit_type": "listening",
+                "subtype": template["subtype"],
+                "title": template["title"],
+                "sequence": template["seq"],
+                "passage": "",
+                "shared_data": {},
+                "questions": [
+                    {
+                        "number": number,
+                        "stem": "",
+                        "options": choices[offset] if offset < len(choices) else [],
+                        "answer": answers.get(number, ""),
+                        "score": 1.0,
+                    }
+                    for offset, number in enumerate(numbers)
+                ],
+            }
+        )
+    return units
+
+
+def _parse_cet_word_bank(
+    blocks: list[str], answers: dict[int, str], start: int, end: int, template: dict[str, Any]
+) -> dict[str, Any]:
+    section = [clean_text(text) for text in blocks[start + 1 : end] if clean_text(text)]
+    # 词库可能在单个段落（老 PDF/其它格式）或多个连续段落（Word 导出常为
+    # "A) word	I) word" 一行两个词）。跨段落聚合，但只接受"纯词库行"：
+    # 段落里每个标签对应的 value 都必须是一个短词（不含空格或长度 <= 18），
+    # 从而排除 Directions / 正文等含完整句子的段落。
+    bank: dict[str, str] = {}
+    bank_indices: set[int] = set()
+    candidates: list[tuple[int, list[tuple[str, str]]]] = []
+    for index, text in enumerate(section):
+        matches = list(CET_BANK_MARK_RE.finditer(text))
+        if not matches:
+            continue
+        entries: list[tuple[str, str]] = []
+        is_bank_line = True
+        for match_index, match in enumerate(matches):
+            label = match.group(1).upper()
+            if label == "0":
+                label = "O"
+            content_start = match.end()
+            content_end = matches[match_index + 1].start() if match_index + 1 < len(matches) else len(text)
+            value = clean_text(text[content_start:content_end])
+            if not value or len(value) > 18 or " " in value:
+                is_bank_line = False
+                break
+            entries.append((label, value))
+        if is_bank_line and entries:
+            candidates.append((index, entries))
+    # 尝试聚合：累计已见标签，直到覆盖 A-O 全集。
+    if candidates:
+        for threshold_start in range(len(candidates)):
+            agg: dict[str, str] = {}
+            idxs: set[int] = set()
+            for j in range(threshold_start, len(candidates)):
+                ci, entries = candidates[j]
+                for label, value in entries:
+                    if label in "ABCDEFGHIJKLMNO" and label not in agg:
+                        agg[label] = value
+                    idxs.add(ci)
+                if len(agg) >= 12 and set(agg) >= set("ABCDEFGHIJKLMNO"):
+                    break
+            if len(agg) >= 12 and set(agg) >= set("ABCDEFGHIJKLMNO"):
+                bank = agg
+                bank_indices = idxs
+                break
+
+    passage_parts = [
+        text
+        for index, text in enumerate(section)
+        if index not in bank_indices
+        and not re.search(r"^Directions", text, re.I)
+        and not _is_noise(text)
+    ]
+    options = [{"key": key, "content": bank.get(key, "")} for key in "ABCDEFGHIJKLMNO"]
+    return {
+        "unit_type": "word_bank",
+        "subtype": template["subtype"],
+        "title": template["title"],
+        "sequence": template["seq"],
+        "passage": "\n\n".join(passage_parts),
+        "shared_data": {"word_bank": bank},
+        "questions": [
+            {
+                "number": number,
+                "stem": "",
+                "options": copy.deepcopy(options),
+                "answer": answers.get(number, ""),
+                "score": 0.5,
+            }
+            for number in template["numbers"]
+        ],
+    }
+
+
+def _parse_cet_paragraph_matching(
+    blocks: list[str], answers: dict[int, str], start: int, end: int, template: dict[str, Any]
+) -> dict[str, Any]:
+    candidates: dict[str, str] = {}
+    statements: dict[int, str] = {}
+    current_label = ""
+    section = blocks[start + 1 : end]
+    # Some PDF text layers embed the next paragraph label at the tail of the
+    # previous paragraph (``...15.8%. D ) The region's economy...``).  Split
+    # such blocks so each label starts its own candidate paragraph.
+    inline_label = re.compile(
+        r"(?<![A-Za-z0-9\[\]])([A-R0])\s*(?:\)|\uff09)(?=\s*[A-Z])",
+    )
+    expanded: list[str] = []
+    for raw in section:
+        text = clean_text(raw)
+        parts = inline_label.split(text)
+        if len(parts) == 1:
+            expanded.append(raw)
+            continue
+        leading = parts[0]
+        if leading.strip():
+            expanded.append(leading)
+        for i in range(1, len(parts), 2):
+            label = parts[i].upper()
+            if label == "0":
+                label = "O"
+            body = parts[i + 1] if i + 1 < len(parts) else ""
+            if body.strip():
+                expanded.append(f"[{label}] {body.strip()}")
+    section = expanded
+    referenced_labels = {
+        str(answers.get(number, "")).strip().upper()
+        for number in range(36, 46)
+        if re.fullmatch(r"[A-P]", str(answers.get(number, "")).strip(), re.I)
+    }
+    for index, raw in enumerate(section):
+        text = clean_text(raw)
+        # CET Word exports use both ``[A] paragraph`` and ``A) paragraph``
+        # forms.  The latter is common in the three-in-one source papers and
+        # may also be concatenated with the first word (``B)Today``).
+        candidate = re.match(
+            r"^\s*(?:\[([A-R0])\]|\(?([A-R0])(?:\)|[)）\.．、]))\s*(.*)$",
+            text,
+            re.I | re.S,
+        )
+        statement = QUESTION_NUMBER_RE.match(text)
+        if candidate:
+            current_label = (candidate.group(1) or candidate.group(2)).upper()
+            if current_label == "0":
+                current_label = "O"
+            candidates[current_label] = clean_text(candidate.group(3))
+        elif statement and 36 <= int(statement.group(1)) <= 45:
+            current_label = ""
+            statements[int(statement.group(1))] = clean_text(statement.group(2))
+        elif current_label and text and not re.search(r"^Directions", text, re.I):
+            missing_labels = referenced_labels - candidates.keys()
+            next_text = next(
+                (clean_text(value) for value in section[index + 1 :] if clean_text(value)),
+                "",
+            )
+            next_statement = QUESTION_NUMBER_RE.match(next_text)
+            expected_label = chr(ord(current_label) + 1) if current_label < "R" else ""
+            # Some CET Word exports drop the final paragraph label while keeping
+            # its body as a separate paragraph. Recover it only when the answer
+            # key references exactly that next label and statements start next.
+            if (
+                missing_labels == {expected_label}
+                and next_statement
+                and 36 <= int(next_statement.group(1)) <= 45
+                and len(text) >= 80
+            ):
+                current_label = expected_label
+                candidates[current_label] = text
+            else:
+                candidates[current_label] = clean_text(candidates[current_label] + " " + text)
+        elif (
+            text
+            and not re.search(r"^(?:Directions|Section|Passage)\b", text, re.I)
+            and 45 not in statements
+            and all(number in statements for number in range(36, 45))
+        ):
+            # A few Word exports lose the final question number while keeping
+            # its statement as a standalone block immediately before Section C.
+            # Only recover it after 36-44 are present, so ordinary paragraph
+            # continuations cannot be mistaken for question 45.
+            statements[45] = text
+    options = [{"key": key, "content": value} for key, value in sorted(candidates.items())]
+    return {
+        "unit_type": "paragraph_matching",
+        "subtype": template["subtype"],
+        "title": template["title"],
+        "sequence": template["seq"],
+        "passage": "\n\n".join(f"[{key}] {value}" for key, value in sorted(candidates.items())),
+        "shared_data": {"paragraphs": candidates},
+        "questions": [
+            {
+                "number": number,
+                "stem": statements.get(number, ""),
+                "options": copy.deepcopy(options),
+                "answer": answers.get(number, ""),
+                "score": 1.0,
+            }
+            for number in template["numbers"]
+        ],
+    }
+
+
+def _parse_cet_reading_passage(
+    blocks: list[str], answers: dict[int, str], start: int, end: int, template: dict[str, Any]
+) -> dict[str, Any]:
+    expected = list(template["numbers"])
+    passage_parts: list[str] = []
+    questions: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    question_started = False
+
+    def add_choices(question: dict[str, Any], text: str) -> None:
+        matches = list(CET_CHOICE_MARK_RE.finditer(text))
+        existing = {option["key"]: option for option in question["options"]}
+        for index, match in enumerate(matches):
+            label = match.group(1).upper()
+            content_start = match.end()
+            content_end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+            content = clean_text(text[content_start:content_end])
+            if content:
+                existing[label] = {"key": label, "content": content}
+        question["options"] = [existing[key] for key in "ABCD" if key in existing]
+
+    for raw in blocks[start + 1 : end]:
+        text = clean_text(raw)
+        if not text or re.search(r"^Questions?\b", text, re.I):
+            continue
+        numbered = QUESTION_NUMBER_RE.match(text)
+        if numbered and int(numbered.group(1)) in expected:
+            if current:
+                questions.append(current)
+            body = clean_text(numbered.group(2))
+            first_choice = CET_CHOICE_MARK_RE.search(body)
+            current = {
+                "number": int(numbered.group(1)),
+                "stem": clean_text(body[: first_choice.start()]) if first_choice else body,
+                "options": [],
+            }
+            if first_choice:
+                add_choices(current, body[first_choice.start() :])
+            question_started = True
+            continue
+        if current and len(current["options"]) == 4 and not CET_CHOICE_MARK_RE.search(text):
+            questions.append(current)
+            used = {question["number"] for question in questions}
+            next_number = next((number for number in expected if number not in used), None)
+            current = (
+                {"number": next_number, "stem": text, "options": []}
+                if next_number is not None
+                else None
+            )
+            continue
+        if current:
+            add_choices(current, text)
+        elif not question_started and not re.search(r"^Directions", text, re.I):
+            passage_parts.append(text)
+    if current:
+        questions.append(current)
+    by_number = {question["number"]: question for question in questions}
+    return {
+        "unit_type": "reading",
+        "subtype": template["subtype"],
+        "title": template["title"],
+        "sequence": template["seq"],
+        "passage": "\n\n".join(passage_parts),
+        "shared_data": {},
+        "questions": [
+            {
+                **by_number.get(number, {"number": number, "stem": "", "options": []}),
+                "answer": answers.get(number, ""),
+                "score": 2.0,
+            }
+            for number in expected
+        ],
+    }
+
+
+def _parse_cet_units(
+    blocks: list[str], answers: dict[int, str], exam_units: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    listening, reading, section_a, section_b, section_c = _cet_section_indexes(blocks)
+    units = _parse_cet_listening(blocks, answers, exam_units)
+    if reading < 0 or min(section_a, section_b, section_c) < 0:
+        return units
+    template_by_type = {unit["type"]: unit for unit in exam_units if unit["type"] != "listening"}
+    units.append(_parse_cet_word_bank(blocks, answers, section_a, section_b, template_by_type["word_bank"]))
+    units.append(_parse_cet_paragraph_matching(blocks, answers, section_b, section_c, template_by_type["paragraph_matching"]))
+    passage_starts = [
+        index
+        for index in range(section_c + 1, len(blocks))
+        if re.match(r"^\s*Passage\s+(?:One|Two|1|2)\s*$", blocks[index], re.I)
+    ]
+    translation = _find_index(
+        blocks,
+        r"^\s*(?:Part\s*IV\s*)?Translation(?:\s*\(\d+\s*minutes?\))?\s*$",
+        section_c + 1,
+    )
+    reading_templates = [unit for unit in exam_units if unit["type"] == "reading"]
+    for index, template in enumerate(reading_templates):
+        start = passage_starts[index] if index < len(passage_starts) else section_c
+        end = passage_starts[index + 1] if index + 1 < len(passage_starts) else (translation if translation > start else len(blocks))
+        units.append(_parse_cet_reading_passage(blocks, answers, start, end, template))
     return units
 
 
@@ -1292,6 +1821,7 @@ def parse_exam(
     answer_name: str | None = None,
     exam_type: str = "",
     audio_paths: list[Path] | None = None,
+    reviewed_answers: dict[int, str] | None = None,
 ) -> dict[str, Any]:
     blocks, detected_format, converted = extract_blocks(path)
     try:
@@ -1335,7 +1865,9 @@ def parse_exam(
         attachment_used = False
         companion = answer_path
         if companion:
-            attachment_answers, attachment_status = extract_answer_attachment(companion)
+            attachment_answers, attachment_status = extract_answer_attachment(
+                companion, exam_type=detected_exam_type
+            )
             answer_key.update(attachment_answers)
             for number in attachment_answers:
                 answer_sources[str(number)] = answer_name or companion.name
@@ -1350,7 +1882,7 @@ def parse_exam(
             legacy_companion = find_companion_answer_pdf(path, year)
             if legacy_companion:
                 attachment_answers, attachment_status = extract_answer_attachment(
-                    legacy_companion
+                    legacy_companion, exam_type=detected_exam_type
                 )
                 if attachment_answers:
                     for number, answer in attachment_answers.items():
@@ -1359,12 +1891,24 @@ def parse_exam(
                     answer_status = attachment_status
                     answer_source = legacy_companion.name
                     attachment_used = True
+        if reviewed_answers:
+            reviewed_source = answer_name or "人工核验答案"
+            for number, answer in reviewed_answers.items():
+                answer_key[int(number)] = str(answer).strip().upper()
+                answer_sources[str(number)] = reviewed_source
+            answer_status = {
+                "status": "confirmed",
+                "message": f"已确认 {len(reviewed_answers)} 道答案",
+            }
+            answer_source = reviewed_source
         units: list[dict[str, Any]] = []
         if detected_exam_type in ("postgraduate_english1", "postgraduate_english2"):
             units = [_parse_cloze(blocks, answer_key)]
             units.extend(_parse_reading(blocks, answer_key))
             if _has_objective_part_b(blocks):
                 units.append(_parse_part_b(blocks, answer_key))
+        elif detected_exam_type in ("cet4", "cet6"):
+            units = _parse_cet_units(blocks, answer_key, exam_units)
         else:
             for template_unit in exam_units:
                 unit_type = template_unit["type"]
@@ -1548,6 +2092,7 @@ def publish_draft(
     profile_id: int = 1,
     audio_paths: list[Path] | None = None,
     audio_names: list[str] | None = None,
+    commit: bool = True,
 ) -> int:
     year = draft.get("year")
     if not year:
@@ -1657,5 +2202,6 @@ def publish_draft(
             audio_paths,
             audio_names,
         )
-    connection.commit()
+    if commit:
+        connection.commit()
     return paper_id

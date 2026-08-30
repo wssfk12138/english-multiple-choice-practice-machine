@@ -18,7 +18,7 @@ import {
   Trash2,
 } from 'lucide-vue-next'
 import { computed, nextTick, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { api, del, get, patch, post, put } from '../api'
 import QuestionBankSwitcher from '../components/QuestionBankSwitcher.vue'
 import { loadQuestionBankProfiles, questionBankProfilesState } from '../services/questionBankProfiles'
@@ -51,6 +51,7 @@ type QuestionLabel = {
 }
 
 const router = useRouter()
+const route = useRoute()
 const jobs = ref<any[]>([])
 const current = ref<any>(null)
 const selectedFile = ref<File | null>(null)
@@ -78,6 +79,12 @@ const esqJobs = ref<any[]>([])
 const esqCurrent = ref<any>(null)
 const selectedEsqFile = ref<File | null>(null)
 const esqResolutions = ref<Record<string, 'keep_existing' | 'replace_with_imported'>>({})
+const importDestinationOpen = ref(false)
+const pendingImportKind = ref<'document' | 'esq'>('document')
+const importDestinationMode = ref<'new_profile' | 'existing_profile'>('new_profile')
+const importProfileName = ref('')
+const existingProfileId = ref(0)
+const importDestinationError = ref('')
 const labelScopeMode = ref('all')
 const importLabelScope = ref<LabelScope | null>(null)
 const overwriteUnlocked = ref(false)
@@ -108,7 +115,7 @@ async function loadJobs() { jobs.value = await get('/imports') }
 async function loadEsqJobs() { esqJobs.value = await get('/question-banks/imports') }
 
 function allLabelScope(): LabelScope {
-  return { kind: 'all', title: '全部题库', year: null, paperIds: [] }
+  return { kind: 'all', title: '全部题库', year: null, paperIds: [], questionBankProfileId: questionBankProfilesState.activeId }
 }
 
 function selectedLabelScope(): LabelScope {
@@ -117,7 +124,7 @@ function selectedLabelScope(): LabelScope {
   }
   if (labelScopeMode.value.startsWith('year:')) {
     const year = Number(labelScopeMode.value.slice(5))
-    return { kind: 'year', title: `${year} 年题库`, year, paperIds: [] }
+    return { kind: 'year', title: `${year} 年题库`, year, paperIds: [], questionBankProfileId: questionBankProfilesState.activeId }
   }
   return allLabelScope()
 }
@@ -210,6 +217,7 @@ async function promptLabelingForJob(job: any) {
     title: job.published_scope_title || job.filename || '本次导入题库',
     year: null,
     paperIds,
+    questionBankProfileId: Number(job.profile_id || questionBankProfilesState.activeId),
   })
 }
 
@@ -270,6 +278,10 @@ onMounted(async () => {
     await loadQuestionBankProfiles()
     targetProfileId.value = questionBankProfilesState.activeId
     await Promise.all([loadJobs(), loadEsqJobs()])
+    const requestedEsqImportId = Number(route.query.esqImportId)
+    if (Number.isInteger(requestedEsqImportId) && requestedEsqImportId > 0) {
+      await openEsqJob(requestedEsqImportId)
+    }
     if (questionLabelingState.scope?.kind === 'papers') {
       setImportLabelScope(questionLabelingState.scope)
     } else if (questionLabelingState.scope?.kind === 'year') {
@@ -290,19 +302,62 @@ async function handleProfileChanged() {
   await Promise.all([loadJobs(), loadEsqJobs()])
 }
 
-async function upload() {
-  if (!selectedFile.value) return
-  if (!importConfirmOpen.value) {
-    importConfirmOpen.value = true
+function suggestedProfileName(file: File) {
+  return file.name.replace(/\.[^.]+$/, '').trim().slice(0, 80) || '新题库'
+}
+
+function chooseImportDestination(kind: 'document' | 'esq') {
+  const file = kind === 'document' ? selectedFile.value : selectedEsqFile.value
+  if (!file) return
+  pendingImportKind.value = kind
+  importDestinationMode.value = 'new_profile'
+  importProfileName.value = suggestedProfileName(file)
+  existingProfileId.value = targetProfileId.value || questionBankProfilesState.activeId
+  importDestinationError.value = ''
+  importDestinationOpen.value = true
+}
+
+async function confirmImportDestination() {
+  importDestinationError.value = ''
+  let profileId = existingProfileId.value
+  if (importDestinationMode.value === 'new_profile') {
+    const name = importProfileName.value.trim()
+    if (!name) { importDestinationError.value = '请输入新题库配置名称'; return }
+    const duplicate = questionBankProfilesState.items.find(
+      profile => String(profile.name).trim().toLocaleLowerCase() === name.toLocaleLowerCase(),
+    )
+    if (duplicate) {
+      importDestinationError.value = '已经存在同名题库配置，请选择“导入已有题库配置”或修改名称。'
+      existingProfileId.value = Number(duplicate.id)
+      return
+    }
+    try {
+      const created: any = await post('/question-bank-profiles', { name })
+      profileId = Number(created.id)
+      await loadQuestionBankProfiles()
+    } catch (cause) { importDestinationError.value = String(cause); return }
+  }
+  if (!questionBankProfilesState.items.some(profile => Number(profile.id) === profileId)) {
+    importDestinationError.value = '请选择要导入的已有题库配置'
     return
   }
+  targetProfileId.value = profileId
+  importDestinationOpen.value = false
+  if (pendingImportKind.value === 'document') importConfirmOpen.value = true
+  else await performEsqUpload(profileId)
+}
+
+function upload() { chooseImportDestination('document') }
+
+async function performDocumentUpload(profileId: number) {
+  if (!selectedFile.value) return
   importConfirmOpen.value = false
   busy.value = true; error.value = ''; notice.value = ''
   uploadStage.value = '正在上传并解析 Word 与答案附件'
   uploadElapsedSeconds.value = 0
   const uploadTimer = window.setInterval(() => { uploadElapsedSeconds.value += 1 }, 1000)
   const form = new FormData(); form.append('file', selectedFile.value)
-  form.append('profile_id', String(targetProfileId.value))
+  form.append('profile_id', String(profileId))
   selectedAnswerFiles.value.forEach(file => form.append('answer_files', file))
   selectedAudioFiles.value.forEach(file => form.append('audio_files', file))
   form.append('use_model_assist', useModelAssist.value ? 'true' : 'false')
@@ -514,17 +569,22 @@ async function publish() {
         title: result.scope_title || current.value.draft.title || `${current.value.draft.year} 年题库`,
         year: null,
         paperIds,
+        questionBankProfileId: Number(
+          current.value.profile_id || questionBankProfilesState.activeId,
+        ),
       })
     }
   } catch (e) { error.value = String(e) }
   finally { busy.value = false }
 }
 
-async function uploadEsq() {
+function uploadEsq() { chooseImportDestination('esq') }
+
+async function performEsqUpload(profileId: number) {
   if (!selectedEsqFile.value) return
   busy.value = true; error.value = ''
   const form = new FormData(); form.append('file', selectedEsqFile.value)
-  form.append('profile_id', String(targetProfileId.value))
+  form.append('profile_id', String(profileId))
   try {
     const result: any = await api('/question-banks/imports', { method: 'POST', body: form })
     esqCurrent.value = await get(`/question-banks/imports/${result.id}`)
@@ -585,6 +645,9 @@ async function publishEsq() {
         title: result.scopeTitle || esqCurrent.value.preview?.title || '本次 ESQ 题库',
         year: null,
         paperIds: result.paperIds,
+        questionBankProfileId: Number(
+          esqCurrent.value.profile_id || questionBankProfilesState.activeId,
+        ),
       })
     } else {
       notice.value = 'ESQ 题库已发布；本次选择保留的题库无需重新标注'
@@ -659,7 +722,7 @@ async function exportEsq(includeLabels = false) {
         <div class="question-label-track" role="progressbar" :aria-valuenow="questionLabelingState.status.percentage" aria-valuemin="0" aria-valuemax="100">
           <span :style="{ width: `${questionLabelingState.status.percentage}%` }" />
         </div>
-        <small>{{ questionLabelingState.status.locked }} 道标签已锁定；人工校正后会默认锁定，不会被批量任务覆盖。</small>
+        <small>{{ questionLabelingState.status.locked }} 道标签已锁定；模型成功标注和人工校正结果都会自动锁定，只有明确解除锁定后才允许重新标注。</small>
       </div>
       <p v-if="questionLabelingState.message" class="api-profile-notice" role="status">{{ questionLabelingState.message }}</p>
       <p v-if="questionLabelingState.error" class="warning" role="alert">{{ questionLabelingState.error }}</p>
@@ -685,12 +748,6 @@ async function exportEsq(includeLabels = false) {
     <div class="grid" style="grid-template-columns:320px 1fr">
       <aside>
         <div class="card">
-          <label class="field">
-            <span>导入到题库配置</span>
-            <select v-model.number="targetProfileId">
-              <option v-for="profile in questionBankProfilesState.items" :key="profile.id" :value="profile.id">{{ profile.name }}</option>
-            </select>
-          </label>
           <label class="field"><span>试卷 Word / 文本型 PDF（必选）</span><input type="file" accept=".doc,.docx,.pdf" @change="selectedFile=($event.target as HTMLInputElement).files?.[0] || null"></label>
           <label class="field"><span>答案附件（可多选）</span><input type="file" accept=".doc,.docx,.pdf" multiple @change="selectedAnswerFiles=Array.from(($event.target as HTMLInputElement).files || [])"><small v-if="selectedAnswerFiles.length">已选择 {{ selectedAnswerFiles.length }} 份答案附件</small></label>
           <label class="field"><span>听力音频（可多选，支持 MP3 / M4A / WAV / OGG）</span><input type="file" accept=".mp3,.m4a,.wav,.ogg,audio/mpeg,audio/mp4,audio/wav,audio/ogg" multiple @change="selectedAudioFiles=Array.from(($event.target as HTMLInputElement).files || [])"><small v-if="selectedAudioFiles.length">已选择 {{ selectedAudioFiles.length }} 个音频文件</small></label>
@@ -951,8 +1008,22 @@ async function exportEsq(includeLabels = false) {
         </p>
         <div style="display:flex;gap:10px;margin-top:20px;justify-content:center">
           <button class="button ghost" type="button" @click="importConfirmOpen=false">取消</button>
-          <button class="button" type="button" @click="upload">确认导入第 1 套</button>
+          <button class="button" type="button" @click="performDocumentUpload(targetProfileId)">确认导入第 1 套</button>
         </div>
+      </div>
+    </div>
+
+    <div v-if="importDestinationOpen" class="review-overlay" role="dialog" aria-modal="true" aria-labelledby="import-destination-title">
+      <div class="review-card import-assist-dialog">
+        <h3 id="import-destination-title">选择导入位置</h3>
+        <p class="lead">检测到题库包：{{ pendingImportKind === 'document' ? selectedFile?.name : selectedEsqFile?.name }}</p>
+        <label class="import-assist-toggle"><input v-model="importDestinationMode" type="radio" value="new_profile"><span>按题库包名称创建新题库配置（推荐）</span></label>
+        <p v-if="importDestinationMode === 'new_profile'" class="lead import-file-hint">适合导入不同考试或科目的新题库，不会切换当前学习题库。</p>
+        <label v-if="importDestinationMode === 'new_profile'" class="field"><span>新题库配置名称</span><input v-model.trim="importProfileName" maxlength="80" @keyup.enter="confirmImportDestination"></label>
+        <label class="import-assist-toggle"><input v-model="importDestinationMode" type="radio" value="existing_profile"><span>导入已有题库配置</span></label>
+        <label v-if="importDestinationMode === 'existing_profile'" class="field"><span>已有题库配置</span><select v-model.number="existingProfileId"><option v-for="profile in questionBankProfilesState.items" :key="profile.id" :value="profile.id">{{ profile.name }}</option></select></label>
+        <p v-if="importDestinationError" class="warning" role="alert">{{ importDestinationError }}</p>
+        <div style="display:flex;gap:10px;margin-top:20px;justify-content:center"><button class="button ghost" type="button" @click="importDestinationOpen=false">取消</button><button class="button" type="button" @click="confirmImportDestination">继续导入</button></div>
       </div>
     </div>
   </div>

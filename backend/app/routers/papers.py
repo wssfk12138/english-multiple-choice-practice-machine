@@ -14,6 +14,20 @@ router = APIRouter(prefix="/papers", tags=["papers"])
 @router.get("")
 def list_papers(connection: sqlite3.Connection = Depends(get_db)) -> list[dict]:
     profile_id = get_active_profile_id(connection)
+    connection.execute(
+        """
+        UPDATE practice_sessions SET status = 'abandoned', updated_at = CURRENT_TIMESTAMP
+        WHERE mode = 'paper' AND status = 'active'
+          AND NOT EXISTS (SELECT 1 FROM practice_answers pa
+            WHERE pa.session_id = practice_sessions.id
+              AND TRIM(COALESCE(pa.user_answer, '')) <> '')
+          AND NOT EXISTS (SELECT 1 FROM practice_unit_submissions pus
+            WHERE pus.session_id = practice_sessions.id)
+          AND COALESCE(practice_sessions.updated_at, practice_sessions.started_at)
+            < datetime('now', '-7 days')
+        """
+    )
+    connection.commit()
     rows = connection.execute(
         """
         SELECT papers.*,

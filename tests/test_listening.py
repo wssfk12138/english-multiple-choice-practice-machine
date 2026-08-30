@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -134,6 +135,127 @@ class ListeningAssetTests(unittest.TestCase):
 
         self.assertEqual(repaired, 1)
         self.assertEqual(shared["audio_tracks"][0]["media_type"], "audio/wav")
+
+    def test_moved_application_relocates_audio_asset_by_hash(self) -> None:
+        from backend.app.database import connect
+        from backend.app.services.listening import (
+            attach_listening_assets,
+            repair_published_listening_assets,
+        )
+
+        audio = Path(self.temp.name) / "relocated.mp3"
+        audio.write_bytes(b"ID3-relocated-audio")
+        with connect() as connection:
+            paper_id, _ = self._paper_with_unit(connection, year=2099)
+            attach_listening_assets(connection, paper_id, [audio], [audio.name])
+            old_path = Path("C:/old-install/question_banks/track-1.mp3")
+            connection.execute(
+                """
+                UPDATE question_bank_assets
+                SET stored_path = ?
+                WHERE package_id = ? AND asset_id = 'listening.track.1'
+                """,
+                (str(old_path), f"local.paper-{paper_id}"),
+            )
+            connection.commit()
+
+            repaired = repair_published_listening_assets(connection)
+            stored_path = Path(
+                connection.execute(
+                    """
+                    SELECT stored_path FROM question_bank_assets
+                    WHERE package_id = ? AND asset_id = 'listening.track.1'
+                    """,
+                    (f"local.paper-{paper_id}",),
+                ).fetchone()["stored_path"]
+            )
+
+        self.assertEqual(repaired, 1)
+        self.assertTrue(stored_path.is_file())
+        self.assertEqual(stored_path.read_bytes(), audio.read_bytes())
+        self.assertTrue(stored_path.is_relative_to(self.question_bank_dir))
+
+    def test_moved_application_does_not_relocate_wrong_audio(self) -> None:
+        from backend.app.database import connect
+        from backend.app.services.listening import (
+            attach_listening_assets,
+            repair_published_listening_assets,
+        )
+
+        audio = Path(self.temp.name) / "wrong-hash.mp3"
+        audio.write_bytes(b"ID3-original-audio")
+        with connect() as connection:
+            paper_id, _ = self._paper_with_unit(connection, year=2100)
+            attach_listening_assets(connection, paper_id, [audio], [audio.name])
+            persisted = (
+                self.question_bank_dir
+                / f"local.paper-{paper_id}"
+                / "1.0.0"
+                / "assets"
+                / "audio"
+                / "track-1.mp3"
+            )
+            persisted.write_bytes(b"ID3-different-audio")
+            old_path = Path("C:/old-install/question_banks/track-1.mp3")
+            connection.execute(
+                """
+                UPDATE question_bank_assets
+                SET stored_path = ?
+                WHERE package_id = ? AND asset_id = 'listening.track.1'
+                """,
+                (str(old_path), f"local.paper-{paper_id}"),
+            )
+            connection.commit()
+
+            repaired = repair_published_listening_assets(connection)
+            stored_path = connection.execute(
+                """
+                SELECT stored_path FROM question_bank_assets
+                WHERE package_id = ? AND asset_id = 'listening.track.1'
+                """,
+                (f"local.paper-{paper_id}",),
+            ).fetchone()["stored_path"]
+
+        self.assertEqual(repaired, 0)
+        self.assertEqual(stored_path, str(old_path))
+
+    def test_moved_application_rejects_asset_path_outside_bank_root(self) -> None:
+        from backend.app.database import connect
+        from backend.app.services.listening import repair_published_listening_assets
+
+        outside = Path(self.temp.name) / "outside" / "assets" / "audio"
+        outside.mkdir(parents=True)
+        audio = outside / "track-1.mp3"
+        audio.write_bytes(b"ID3-outside-audio")
+        with connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO question_bank_assets
+                    (package_id, content_version, asset_id, stored_path,
+                     media_type, sha256, metadata)
+                VALUES ('../outside', '.', 'listening.track.1', ?,
+                        'audio/mpeg', ?, '{}')
+                """,
+                (
+                    "C:/old-install/question_banks/track-1.mp3",
+                    hashlib.sha256(audio.read_bytes()).hexdigest(),
+                ),
+            )
+            connection.commit()
+
+            repaired = repair_published_listening_assets(connection)
+            stored_path = connection.execute(
+                """
+                SELECT stored_path FROM question_bank_assets
+                WHERE package_id = '../outside'
+                """
+            ).fetchone()["stored_path"]
+
+        self.assertEqual(repaired, 0)
+        self.assertEqual(
+            stored_path,
+            "C:/old-install/question_banks/track-1.mp3",
+        )
 
     def test_multiple_audio_tracks_are_mapped_to_listening_sections(self) -> None:
         from backend.app.database import connect

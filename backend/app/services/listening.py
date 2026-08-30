@@ -41,6 +41,67 @@ def _track_url(package_id: str, content_version: str, asset_id: str) -> str:
     )
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _relocate_moved_audio_assets(connection: sqlite3.Connection) -> int:
+    """Repair audio asset paths after the whole application directory moves."""
+
+    root = QUESTION_BANK_DIR.resolve()
+    rows = connection.execute(
+        """
+        SELECT id, package_id, content_version, stored_path, sha256
+        FROM question_bank_assets
+        WHERE media_type LIKE 'audio/%'
+        """
+    ).fetchall()
+    repaired = 0
+    for row in rows:
+        stored_path = Path(row["stored_path"])
+        try:
+            stored_path.resolve().relative_to(root)
+            if stored_path.is_file():
+                continue
+        except ValueError:
+            pass
+
+        asset_root = (
+            root / row["package_id"] / row["content_version"] / "assets"
+        ).resolve()
+        try:
+            asset_root.relative_to(root)
+        except ValueError:
+            continue
+        expected = asset_root / "audio" / stored_path.name
+        candidates = [expected] if expected.is_file() else []
+        if not candidates and asset_root.is_dir():
+            candidates = [
+                candidate
+                for candidate in asset_root.rglob(stored_path.name)
+                if candidate.is_file()
+            ]
+        matches = []
+        for candidate in candidates:
+            try:
+                if _sha256(candidate) == row["sha256"]:
+                    matches.append(candidate)
+            except OSError:
+                continue
+        if len(matches) != 1:
+            continue
+        connection.execute(
+            "UPDATE question_bank_assets SET stored_path = ? WHERE id = ?",
+            (str(matches[0]), row["id"]),
+        )
+        repaired += 1
+    return repaired
+
+
 def _assign_tracks_to_units(
     connection: sqlite3.Connection,
     listening_units: list[sqlite3.Row],
@@ -246,7 +307,8 @@ def _repair_existing_track_assignments(connection: sqlite3.Connection) -> int:
 def repair_published_listening_assets(connection: sqlite3.Connection) -> int:
     """Recover audio uploaded by older versions but never attached on publish."""
 
-    repaired = _repair_existing_track_assignments(connection)
+    repaired = _relocate_moved_audio_assets(connection)
+    repaired += _repair_existing_track_assignments(connection)
     jobs = connection.execute(
         """
         SELECT parse_context

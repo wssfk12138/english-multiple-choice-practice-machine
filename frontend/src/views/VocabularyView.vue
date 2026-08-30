@@ -169,7 +169,6 @@ onMounted(load)
           </p>
           <blockquote>{{ reviewWord.latest_sentence }}</blockquote>
           <div class="review-actions">
-            <button class="button danger" @click="rate('again')">不认识</button>
             <button class="button secondary" @click="rate('hard')">有点印象</button>
             <button class="button" @click="rate('mastered')">已掌握</button>
           </div>

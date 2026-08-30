@@ -39,7 +39,13 @@ import httpx
 
 QUESTION_EXTENSIONS = {".doc", ".docx", ".pdf"}
 ANSWER_EXTENSIONS = {".doc", ".docx", ".pdf"}
-AUDIO_EXTENSIONS = {".mp3"}
+AUDIO_EXTENSIONS = {".mp3", ".m4a", ".wav", ".ogg"}
+AUDIO_CONTENT_TYPES = {
+    ".mp3": "audio/mpeg",
+    ".m4a": "audio/mp4",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+}
 ANSWER_WORDS = (
     "答案",
     "参考答案",
@@ -79,16 +85,57 @@ def _year_tokens(path: Path) -> set[str]:
 
 
 def _month_token(path: Path) -> str:
-    matches = re.findall(
-        r"(?:年|[.\-_])\s*(0?[1-9]|1[0-2])\s*月?",
+    """Return the exam month without mistaking ``.12`` for month 1.
+
+    The source tree mixes ``2025.12``, ``2025年12月`` and ``2025-12``.
+    Matching the complete year/month pair (and putting 10-12 first) avoids
+    the old regex accepting only the leading ``1`` from ``12``.
+    """
+    match = re.search(
+        r"(?<!\d)(?:19|20)\d{2}\s*(?:年|[.\-_])\s*(1[0-2]|0?[1-9])\s*月?",
         path.stem,
     )
-    return matches[0].zfill(2) if matches else ""
+    return match.group(1).zfill(2) if match else ""
 
 
 def _set_number(path: Path) -> int | None:
-    match = re.search(r"第\s*([1-9])\s*套", path.stem)
-    return int(match.group(1)) if match else None
+    stem = path.stem
+    match = re.search(r"第\s*([一二三1-3])\s*套", stem)
+    if match:
+        value = match.group(1)
+        return {"一": 1, "二": 2, "三": 3}.get(
+            value, int(value) if value.isdigit() else None
+        )
+    # Some answer attachments use ``（一）``/``(2)`` instead of ``第2套``.
+    match = re.search(r"[（(]\s*([一二三1-3])\s*[）)]", stem)
+    if not match:
+        match = re.search(r"(?:解析|答案)\s*([1-3])(?:\D|$)", stem)
+    if not match:
+        return None
+    value = match.group(1)
+    return {"一": 1, "二": 2, "三": 3}.get(
+        value, int(value) if value.isdigit() else None
+    )
+
+
+def _exam_level(path: Path) -> str:
+    filename = path.stem.casefold()
+    filename_cet4 = "四级" in filename or "cet4" in filename
+    filename_cet6 = "六级" in filename or "cet6" in filename
+    if filename_cet4 != filename_cet6:
+        return "cet4" if filename_cet4 else "cet6"
+    value = "/".join(part.casefold() for part in path.parts)
+    has_cet4 = "四级" in value or "cet4" in value
+    has_cet6 = "六级" in value or "cet6" in value
+    if has_cet4 == has_cet6:
+        return ""
+    return "cet4" if has_cet4 else "cet6"
+
+
+def _same_exam_level(left: Path, right: Path) -> bool:
+    left_level = _exam_level(left)
+    right_level = _exam_level(right)
+    return not left_level or not right_level or left_level == right_level
 
 
 def _same_exam_period(left: Path, right: Path) -> bool:
@@ -110,6 +157,15 @@ def _sha256(path: Path) -> str:
 def _is_answer_file(path: Path) -> bool:
     lowered = path.stem.casefold()
     return any(word.casefold() in lowered for word in ANSWER_WORDS)
+
+
+def _is_non_question_audio_text(path: Path) -> bool:
+    """Exclude listening transcripts/translations mistakenly stored as PDFs."""
+    lowered = path.stem.casefold()
+    return any(
+        marker in lowered
+        for marker in ("听力原文", "原文译文", "听力材料", "listeningtranscript")
+    )
 
 
 def _score_answer(question: Path, answer: Path) -> int:
@@ -136,15 +192,24 @@ def discover_batch(source: Path) -> list[BatchItem]:
     if not source.exists() or not source.is_dir():
         raise ValueError(f"题库目录不存在：{source}")
     files = [path for path in source.rglob("*") if path.is_file()]
+    source_level = _exam_level(source)
     question_candidates = [
         path for path in files
-        if path.suffix.casefold() in QUESTION_EXTENSIONS and not _is_answer_file(path)
+        if path.suffix.casefold() in QUESTION_EXTENSIONS
+        and not _is_answer_file(path)
+        and not _is_non_question_audio_text(path)
+        and not (
+            source_level
+            and _exam_level(path)
+            and _exam_level(path) != source_level
+        )
     ]
     answers = [path for path in files if path.suffix.casefold() in ANSWER_EXTENSIONS and _is_answer_file(path)]
     audios = [path for path in files if path.suffix.casefold() in AUDIO_EXTENSIONS]
     by_paper_key: dict[tuple[tuple[str, ...], str, int | None], list[Path]] = {}
     for path in question_candidates:
         paper_key = (
+            _exam_level(path),
             tuple(sorted(_year_tokens(path))),
             _month_token(path),
             _set_number(path),
@@ -162,7 +227,7 @@ def discover_batch(source: Path) -> list[BatchItem]:
         )[0]
         questions.append(preferred)
     individual_periods = {
-        (tuple(sorted(_year_tokens(path))), _month_token(path))
+        (_exam_level(path), tuple(sorted(_year_tokens(path))), _month_token(path))
         for path in questions
         if _set_number(path) is not None
     }
@@ -170,7 +235,7 @@ def discover_batch(source: Path) -> list[BatchItem]:
         path
         for path in questions
         if _set_number(path) is not None
-        or (tuple(sorted(_year_tokens(path))), _month_token(path))
+        or (_exam_level(path), tuple(sorted(_year_tokens(path))), _month_token(path))
         not in individual_periods
     ]
     result: list[BatchItem] = []
@@ -188,6 +253,7 @@ def discover_batch(source: Path) -> list[BatchItem]:
             answer
             for score, answer in ranked
             if score >= 40
+            and _same_exam_level(question, answer)
             and _same_exam_period(question, answer)
             and (
                 question_set is None
@@ -203,7 +269,8 @@ def discover_batch(source: Path) -> list[BatchItem]:
                 matched_answers = exact_set_answers
         same_folder_audio = [
             audio for audio in audios
-            if _same_exam_period(question, audio)
+            if _same_exam_level(question, audio)
+            and _same_exam_period(question, audio)
             and (
                 question_set is None
                 or _set_number(audio) is None
@@ -320,7 +387,11 @@ def _upload_item(
     for audio_name in item.audio_paths:
         audio = Path(audio_name)
         with audio.open("rb") as source:
-            files.append(("audio_files", (audio.name, source.read(), "audio/mpeg")))
+            content_type = AUDIO_CONTENT_TYPES.get(
+                audio.suffix.casefold(),
+                "application/octet-stream",
+            )
+            files.append(("audio_files", (audio.name, source.read(), content_type)))
     data = {
         "profile_id": str(profile_id),
         "use_model_assist": "true",
@@ -442,7 +513,11 @@ def _label_published_paper(
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="英语刷题机可恢复批量导入工具")
-    parser.add_argument("--source", required=True, help="包含 Word 试卷、答案附件和可选 MP3 的目录")
+    parser.add_argument(
+        "--source",
+        required=True,
+        help="包含 Word/PDF 试卷、答案附件和可选 MP3/M4A/WAV/OGG 的目录",
+    )
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="本地服务 API 地址")
     parser.add_argument("--profile-id", type=int, required=True, help="目标题库配置 ID")
     parser.add_argument("--ai-profile-id", type=int, default=None, help="模型配置 ID；不填使用默认启用配置")

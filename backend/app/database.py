@@ -303,6 +303,7 @@ CREATE TABLE IF NOT EXISTS ai_messages (
     conversation_id INTEGER NOT NULL,
     role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
     content TEXT NOT NULL,
+    attachments TEXT,
     profile_id INTEGER,
     model_id TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -320,7 +321,7 @@ CREATE TABLE IF NOT EXISTS question_ai_labels (
     context_dependency TEXT NOT NULL DEFAULT 'medium',
     grammar_dependency TEXT NOT NULL DEFAULT 'medium',
     confidence REAL NOT NULL DEFAULT 0,
-    locked INTEGER NOT NULL DEFAULT 0,
+    locked INTEGER NOT NULL DEFAULT 1,
     user_edited INTEGER NOT NULL DEFAULT 0,
     model_name TEXT NOT NULL DEFAULT '',
     label_version INTEGER NOT NULL DEFAULT 1,
@@ -335,6 +336,26 @@ CREATE TABLE IF NOT EXISTS question_label_run_items (
     processed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (run_id, question_id),
     FOREIGN KEY (question_id) REFERENCES questions(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS question_label_runs (
+    run_id TEXT PRIMARY KEY,
+    question_bank_profile_id INTEGER NOT NULL,
+    scope_kind TEXT NOT NULL DEFAULT 'all',
+    year INTEGER,
+    paper_ids TEXT NOT NULL DEFAULT '[]',
+    overwrite_unlocked INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'running',
+    started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    finished_at TEXT,
+    last_error TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (question_bank_profile_id) REFERENCES question_bank_profiles(id)
+);
+
+CREATE TABLE IF NOT EXISTS app_migrations (
+    migration_key TEXT PRIMARY KEY,
+    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS wrong_analysis_reports (
@@ -437,6 +458,8 @@ CREATE INDEX IF NOT EXISTS idx_question_ai_labels_locked
     ON question_ai_labels(locked, updated_at);
 CREATE INDEX IF NOT EXISTS idx_question_label_run_items_question
     ON question_label_run_items(question_id, run_id);
+CREATE INDEX IF NOT EXISTS idx_question_label_runs_profile_status
+    ON question_label_runs(question_bank_profile_id, status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_wrong_analysis_created
     ON wrong_analysis_reports(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_question_bank_assets_lookup
@@ -543,6 +566,33 @@ def _paper_child_create_statements() -> dict[str, str]:
     return statements
 
 
+def _migrate_question_label_auto_lock(connection: sqlite3.Connection) -> None:
+    label_lock_migration = connection.execute(
+        "SELECT 1 FROM app_migrations WHERE migration_key = 'question-label-auto-lock-v1'"
+    ).fetchone()
+    if label_lock_migration is not None:
+        return
+    connection.execute(
+        """
+        UPDATE question_ai_labels
+        SET locked = 1, updated_at = CURRENT_TIMESTAMP
+        WHERE locked = 0
+          AND EXISTS (
+              SELECT 1 FROM questions
+              WHERE questions.id = question_ai_labels.question_id
+          )
+          AND (
+              TRIM(COALESCE(primary_skill, '')) <> ''
+              OR TRIM(COALESCE(model_name, '')) <> ''
+              OR user_edited = 1
+          )
+        """
+    )
+    connection.execute(
+        "INSERT INTO app_migrations (migration_key) VALUES ('question-label-auto-lock-v1')"
+    )
+
+
 def _run_migrations(connection: sqlite3.Connection) -> None:
     connection.execute(
         """
@@ -568,6 +618,7 @@ def _run_migrations(connection: sqlite3.Connection) -> None:
     _ensure_column(connection, "questions", "content_hash", "TEXT")
     _ensure_column(connection, "options", "metadata", "TEXT NOT NULL DEFAULT '{}'")
     _ensure_column(connection, "wrong_analysis_reports", "scope_key", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(connection, "ai_messages", "attachments", "TEXT")
     _ensure_column(connection, "wrong_analysis_reports", "unit_ids", "TEXT NOT NULL DEFAULT '[]'")
     _ensure_column(connection, "wrong_analysis_reports", "input_snapshot", "TEXT NOT NULL DEFAULT '{}'")
     _ensure_column(connection, "wrong_analysis_states", "analyzed_session_id", "INTEGER NOT NULL DEFAULT 0")
@@ -597,6 +648,7 @@ def _run_migrations(connection: sqlite3.Connection) -> None:
         "UPDATE import_jobs SET profile_id = ? WHERE profile_id IS NULL OR profile_id = 0",
         (default_profile_id,),
     )
+    _migrate_question_label_auto_lock(connection)
     # Older databases declared papers.year globally UNIQUE. Rebuild only that
     # table so the new invariant can be scoped by profile/external_key while
     # preserving all existing IDs and foreign-key references.

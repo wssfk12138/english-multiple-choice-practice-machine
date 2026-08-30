@@ -52,6 +52,48 @@ def _serialize_job(row: sqlite3.Row) -> dict:
     return payload
 
 
+def create_question_bank_import(
+    connection: sqlite3.Connection,
+    stored_path: Path,
+    filename: str,
+    profile_id: int | None = None,
+) -> dict:
+    selected_profile_id = profile_id or get_active_profile_id(connection)
+    if not connection.execute(
+        "SELECT 1 FROM question_bank_profiles WHERE id = ? AND deleted_at IS NULL",
+        (selected_profile_id,),
+    ).fetchone():
+        raise _error("PROFILE_NOT_FOUND", "目标题库配置不存在")
+    package = load_esq_package(stored_path)
+    preview = build_preview(connection, package, profile_id=selected_profile_id)
+    serializable = {**package, "source_path": str(stored_path)}
+    detected_year = package["papers"][0]["year"] if package["papers"] else None
+    cursor = connection.execute(
+        """
+        INSERT INTO import_jobs
+            (profile_id, filename, stored_path, detected_year, detected_format,
+             status, draft_data, warnings)
+        VALUES (?, ?, ?, ?, 'esq-1.0', 'draft', ?, '[]')
+        """,
+        (
+            selected_profile_id,
+            filename,
+            str(stored_path),
+            detected_year,
+            json.dumps(serializable, ensure_ascii=False),
+        ),
+    )
+    connection.commit()
+    return {
+        "id": cursor.lastrowid,
+        "filename": filename,
+        "format": "esq-1.0",
+        "preview": preview,
+        "warnings": [],
+        "profile_id": selected_profile_id,
+    }
+
+
 @router.get("/imports")
 def list_question_bank_imports(
     connection: sqlite3.Connection = Depends(get_db),
@@ -77,12 +119,6 @@ async def upload_question_bank(
     profile_id: int | None = Form(default=None),
     connection: sqlite3.Connection = Depends(get_db),
 ) -> dict:
-    selected_profile_id = profile_id or get_active_profile_id(connection)
-    if not connection.execute(
-        "SELECT 1 FROM question_bank_profiles WHERE id = ? AND deleted_at IS NULL",
-        (selected_profile_id,),
-    ).fetchone():
-        raise _error("PROFILE_NOT_FOUND", "目标题库配置不存在")
     if not file.filename or Path(file.filename).suffix.lower() not in {".esq", ".zip"}:
         raise _error("UNSUPPORTED_FILE", "请选择 .esq 或 .zip 题库包")
     stored_path = UPLOAD_DIR / f"{uuid.uuid4().hex}.esq"
@@ -97,37 +133,7 @@ async def upload_question_bank(
                 if size > MAX_PACKAGE_BYTES:
                     raise _error("FILE_TOO_LARGE", "ESQ 文件不能超过 100 MiB")
                 target.write(chunk)
-        package = load_esq_package(stored_path)
-        preview = build_preview(connection, package, profile_id=selected_profile_id)
-        serializable = {
-            **package,
-            "source_path": str(stored_path),
-        }
-        detected_year = package["papers"][0]["year"] if package["papers"] else None
-        cursor = connection.execute(
-            """
-            INSERT INTO import_jobs
-                (profile_id, filename, stored_path, detected_year, detected_format,
-                 status, draft_data, warnings)
-            VALUES (?, ?, ?, ?, 'esq-1.0', 'draft', ?, '[]')
-            """,
-            (
-                selected_profile_id,
-                file.filename,
-                str(stored_path),
-                detected_year,
-                json.dumps(serializable, ensure_ascii=False),
-            ),
-        )
-        connection.commit()
-        return {
-            "id": cursor.lastrowid,
-            "filename": file.filename,
-            "format": "esq-1.0",
-            "preview": preview,
-            "warnings": [],
-            "profile_id": selected_profile_id,
-        }
+        return create_question_bank_import(connection, stored_path, file.filename, profile_id)
     except EsqValidationError as error:
         stored_path.unlink(missing_ok=True)
         raise _error("VALIDATION_ERROR", "题库包校验失败", error.details) from error

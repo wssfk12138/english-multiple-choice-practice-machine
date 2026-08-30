@@ -6,12 +6,16 @@ from lxml import etree
 
 from backend.app.services.docx_parser import (
     NS,
+    _cet_answer_key_is_reliable,
     _extract_answers_from_text,
     _detect_subject,
     _ensure_numbered_blanks,
     _extract_ooxml_text,
     _has_objective_part_b,
+    _cet_choice_groups,
+    _parse_cet_paragraph_matching,
     _parse_part_b,
+    _parse_cet_units,
     _remove_duplicate_cloze_number_noise,
     apply_answers_to_draft,
     clean_text,
@@ -22,6 +26,88 @@ from backend.app.services.passage_cleanup import repair_inline_blank_paragraph_b
 
 
 class OoxmlBlankExtractionTests(unittest.TestCase):
+    def test_cet_parser_recovers_all_objective_sections(self) -> None:
+        blocks = [
+            "Part II Listening Comprehension",
+            "Section A",
+            *[f"{n}. A) a{n} B) b{n} C) c{n} D) d{n}" for n in range(1, 8)],
+            "Section B",
+            *[f"{n}. A) a{n} B) b{n} C) c{n} D) d{n}" for n in range(8, 16)],
+            "Section C",
+            *[f"{n}. A) a{n} B) b{n} C) c{n} D) d{n}" for n in range(16, 26)],
+            "Part III Reading Comprehension",
+            "Section A",
+            "Passage with 26 ______ through 35 ______.",
+            "A) a B) b C) c D) d E) e F) f G) g H) h I) i J) j K) k L) l M) m N) n O) o",
+            "Section B",
+            *[f"[{letter}] Paragraph {letter}." for letter in "ABCDEFGHIJK"],
+            *[f"{n}. Statement {n}." for n in range(36, 46)],
+            "Section C",
+            "Passage One",
+            "Questions 46 to 50 are based on the following passage.",
+            "Passage one body.",
+            *[f"{n}. Stem {n}?" for n in range(46, 51) for _ in [0]],
+        ]
+        for number in range(46, 51):
+            index = blocks.index(f"{number}. Stem {number}?") + 1
+            blocks[index:index] = ["A) a", "B) b", "C) c", "D) d"]
+        blocks.extend([
+            "Passage Two",
+            "Questions 51 to 55 are based on the following passage.",
+            "Passage two body.",
+        ])
+        for number in range(51, 56):
+            blocks.extend([
+                f"{number}. Stem {number}?", "A) a", "B) b", "C) c", "D) d"
+            ])
+        blocks.append("Part IV Translation")
+
+        from backend.app.services.exam_templates import template_units
+
+        units = _parse_cet_units(blocks, {}, template_units("cet4"))
+        self.assertEqual(sum(len(unit["questions"]) for unit in units), 55)
+        self.assertTrue(all(len(question["options"]) == 4 for unit in units[:3] for question in unit["questions"]))
+        self.assertEqual(len(units[3]["shared_data"]["word_bank"]), 15)
+        self.assertEqual(len(units[4]["shared_data"]["paragraphs"]), 11)
+        self.assertTrue(all(question["stem"] for unit in units[-2:] for question in unit["questions"]))
+        self.assertTrue(all(len(question["options"]) == 4 for unit in units[-2:] for question in unit["questions"]))
+
+    def test_sparse_or_out_of_range_cet_answers_are_rejected(self) -> None:
+        self.assertFalse(_cet_answer_key_is_reliable({1: "H", 2: "E", 18: "O"}))
+        reliable = {number: "A" for number in range(1, 56)}
+        reliable.update({number: "O" for number in range(26, 46)})
+        self.assertTrue(_cet_answer_key_is_reliable(reliable))
+
+    def test_paragraph_matching_recovers_a_unique_missing_final_label(self) -> None:
+        blocks = [
+            "Section B",
+            *[f"[{letter}] Paragraph {letter}." for letter in "ABCDEFGHIJK"],
+            "This separate final paragraph has enough text to be a real candidate "
+            "and its missing label is confirmed by the supplied answer key.",
+            *[f"{number}. Statement {number}." for number in range(36, 46)],
+            "Section C",
+        ]
+        unit = _parse_cet_paragraph_matching(
+            blocks,
+            {38: "L"},
+            0,
+            len(blocks) - 1,
+            {
+                "subtype": "paragraph_matching",
+                "title": "paragraph_matching",
+                "seq": 1,
+                "numbers": range(36, 46),
+            },
+        )
+        self.assertEqual(
+            list(unit["shared_data"]["paragraphs"]),
+            list("ABCDEFGHIJKL"),
+        )
+        self.assertEqual(
+            unit["shared_data"]["paragraphs"]["K"],
+            "Paragraph K.",
+        )
+
     def test_private_word_control_character_is_removed(self) -> None:
         self.assertEqual(clean_text("Text 3\ue004"), "Text 3")
 
@@ -254,6 +340,174 @@ class OoxmlBlankExtractionTests(unittest.TestCase):
         }
         apply_answers_to_draft(draft)
         self.assertEqual(validate_draft(draft), [])
+
+    def test_cet6_validation_matches_listening_by_subtype(self) -> None:
+        def unit(unit_type: str, subtype: str, numbers: range) -> dict:
+            return {
+                "unit_type": unit_type,
+                "subtype": subtype,
+                "title": subtype,
+                "sequence": 1,
+                "passage": "Passage",
+                "shared_data": {},
+                "questions": [
+                    {
+                        "number": number,
+                        "stem": f"Question {number}",
+                        "options": [
+                            {"key": key, "content": key}
+                            for key in ("A", "B", "C", "D")
+                        ],
+                        "answer": "A",
+                        "score": 1.0,
+                    }
+                    for number in numbers
+                ],
+            }
+
+        draft = {
+            "exam_type": "cet6",
+            "set_number": 1,
+            "answers": {str(number): "A" for number in range(1, 56)},
+            "answer_status": {"status": "confirmed"},
+            "answers_confirmed": True,
+            "units": [
+                unit("listening", "long_conversation", range(1, 9)),
+                unit("listening", "passage", range(9, 16)),
+                unit("listening", "lecture", range(16, 26)),
+                unit("word_bank", "word_bank", range(26, 36)),
+                unit("paragraph_matching", "paragraph_matching", range(36, 46)),
+                unit("reading", "reading_a", range(46, 51)),
+                unit("reading", "reading_a", range(51, 56)),
+            ],
+        }
+        self.assertEqual(validate_draft(draft), [])
+
+    def test_cet_third_set_does_not_require_listening_units(self) -> None:
+        # 第三套试卷卷面常标注听力与其它套相同、不再重复给出，
+        # 校验时应允许 set_number=3 的 CET 草稿缺少 listening 单元。
+        def unit(unit_type: str, subtype: str, numbers: range) -> dict:
+            return {
+                "unit_type": unit_type,
+                "subtype": subtype,
+                "title": subtype,
+                "sequence": 1,
+                "passage": "Passage",
+                "shared_data": {},
+                "questions": [
+                    {
+                        "number": number,
+                        "stem": f"Question {number}",
+                        "options": [
+                            {"key": key, "content": key}
+                            for key in ("A", "B", "C", "D")
+                        ],
+                        "answer": "A",
+                        "score": 1.0,
+                    }
+                    for number in numbers
+                ],
+            }
+
+        draft = {
+            "exam_type": "cet6",
+            "set_number": 3,
+            "answers": {str(number): "A" for number in range(26, 56)},
+            "answer_status": {"status": "confirmed"},
+            "answers_confirmed": True,
+            "units": [
+                unit("word_bank", "word_bank", range(26, 36)),
+                unit("paragraph_matching", "paragraph_matching", range(36, 46)),
+                unit("reading", "reading_a", range(46, 51)),
+                unit("reading", "reading_a", range(51, 56)),
+            ],
+        }
+        self.assertEqual(validate_draft(draft), [])
+
+    def test_cet_reading_section_a_above_reading_title_is_found(self) -> None:
+        # 部分试卷版式把 "Section A" 放在 "Reading Comprehension" 标题之上，
+        # 修复前 _cet_section_indexes 从 reading 之后才开始找 Section A 导致漏检。
+        blocks = [
+            "Part II Listening Comprehension",
+            "Section A",
+            *[f"{n}. A) a{n} B) b{n} C) c{n} D) d{n}" for n in range(1, 8)],
+            "Section B",
+            *[f"{n}. A) a{n} B) b{n} C) c{n} D) d{n}" for n in range(8, 16)],
+            "Section C",
+            *[f"{n}. A) a{n} B) b{n} C) c{n} D) d{n}" for n in range(16, 26)],
+            "Section A",
+            "Reading Comprehension",
+            "(40 minutes)",
+            "Passage with 26 ______ through 35 ______.",
+            "A) a B) b C) c D) d E) e F) f G) g H) h I) i J) j K) k L) l M) m N) n O) o",
+            "Section B",
+            *[f"[{letter}] Paragraph {letter}." for letter in "ABCDEFGHIJK"],
+            *[f"{n}. Statement {n}." for n in range(36, 46)],
+            "Section C",
+            "Passage One",
+            "Questions 46 to 50 are based on the following passage.",
+            "Passage one body.",
+            *[f"{n}. Stem {n}?" for n in range(46, 51)],
+            "Passage Two",
+            "Questions 51 to 55 are based on the following passage.",
+            "Passage two body.",
+            *[f"{n}. Stem {n}?" for n in range(51, 56)],
+            "Part IV Translation",
+        ]
+        for number in range(46, 51):
+            index = blocks.index(f"{number}. Stem {number}?") + 1
+            blocks[index:index] = ["A) a", "B) b", "C) c", "D) d"]
+        for number in range(51, 56):
+            index = blocks.index(f"{number}. Stem {number}?") + 1
+            blocks[index:index] = ["A) a", "B) b", "C) c", "D) d"]
+
+        from backend.app.services.exam_templates import template_units
+
+        units = _parse_cet_units(blocks, {}, template_units("cet6"))
+        self.assertEqual(sum(len(unit["questions"]) for unit in units), 55)
+        self.assertEqual(len(units), 7)
+
+    def test_cet_mangled_questions_header_still_starts_option_groups(self) -> None:
+        # PDF 文字层把 "Questions 1 to 4" 渲染成 "Questions! to 4"，
+        # 修复前头部正则 ^Questions?\s+\d+ 匹配失败导致前 4 题选项被跳过。
+        blocks = [
+            "Directions: In this section, you will hear two long conversations.",
+            "Questions! to 4 are based on the conversation you have just heard.",
+            "1. A) a1 C) c1",
+            "B) b1 D) d1",
+            "2. A) a2 C) c2",
+            "B) b2 D) d2",
+            "3. A) a3 C) c3",
+            "B) b3 D) d3",
+            "4. A) a4 C) c4",
+            "B) b4 D) d4",
+            "Questions 5 to 8 are based on the conversation you have just heard.",
+            "5. A) a5 C) c5",
+            "B) b5 D) d5",
+            "6. A) a6 C) c6",
+            "B) b6 D) d6",
+            "7. A) a7 C) c7",
+            "B) b7 D) d7",
+            "8. A) a8 C) c8",
+            "B) b8 D) d8",
+        ]
+        choices = _cet_choice_groups(blocks, 8)
+        self.assertEqual(len(choices), 8)
+        self.assertTrue(
+            all([option["key"] for option in group] == list("ABCD") for group in choices)
+        )
+
+    def test_cet_parser_does_not_crash_when_listening_sections_are_incomplete(self) -> None:
+        from backend.app.services.exam_templates import template_units
+
+        blocks = [
+            "Part II Listening Comprehension",
+            "Section A",
+            "1. A) a B) b C) c D) d",
+            "Section B",
+            "Part III Reading Comprehension",
+        ]
+        self.assertEqual(_parse_cet_units(blocks, {}, template_units("cet6")), [])
 
 
 if __name__ == "__main__":
