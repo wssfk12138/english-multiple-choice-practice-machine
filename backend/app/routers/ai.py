@@ -31,8 +31,10 @@ from ..services.ai_client import (
 )
 from ..services.docx_parser import validate_draft
 from ..services.question_labeling import (
+    _update_run_status,
     label_next_unit,
     labeling_status,
+    pause_label_run,
     update_question_label,
 )
 from ..services.wrong_analysis import (
@@ -90,7 +92,7 @@ def _conversation_payload(
         raise HTTPException(404, "对话不存在")
     messages = connection.execute(
         """
-        SELECT id, role, content, profile_id, model_id, created_at
+        SELECT id, role, content, attachments, profile_id, model_id, created_at
         FROM ai_messages
         WHERE conversation_id = ?
         ORDER BY id
@@ -98,7 +100,12 @@ def _conversation_payload(
         (conversation_id,),
     ).fetchall()
     payload = dict(row)
-    payload["messages"] = [dict(message) for message in messages]
+    serialized = []
+    for message in messages:
+        item = dict(message)
+        item["attachments"] = json.loads(item.pop("attachments") or "[]")
+        serialized.append(item)
+    payload["messages"] = serialized
     return payload
 
 
@@ -554,6 +561,20 @@ def chat(
     else:
         _conversation_payload(connection, conversation_id)
 
+    attachments = [
+        item
+        for item in (request.attachments or [])
+        if isinstance(item.data_url, str) and item.data_url.startswith("data:image/")
+    ][:4]
+    # data URL 为 ASCII base64，长度近似字节数；与前端附件条的上限保持一致。
+    max_attachment_chars = 8 * 1024 * 1024
+    for item in attachments:
+        if len(item.data_url) > max_attachment_chars:
+            raise HTTPException(422, "单张图片附件过大（超过 8 MiB），请裁剪或压缩后再试")
+    user_text = request.message.strip()
+    if not user_text and not attachments:
+        raise HTTPException(400, "请输入问题或添加图片")
+
     history = connection.execute(
         """
         SELECT role, content FROM ai_messages
@@ -564,7 +585,15 @@ def chat(
         (conversation_id,),
     ).fetchall()
     messages = [dict(row) for row in reversed(history)]
-    messages.append({"role": "user", "content": request.message.strip()})
+    if attachments:
+        content_parts = []
+        if user_text:
+            content_parts.append({"type": "text", "text": user_text})
+        for item in attachments:
+            content_parts.append({"type": "image_url", "image_url": {"url": item.data_url}})
+        messages.append({"role": "user", "content": content_parts})
+    else:
+        messages.append({"role": "user", "content": user_text})
     system_prompt = (
         "你是英语刷题机中的考研英语学习助手。回答要准确、清晰、直接。"
         "用户可能在做题时提问，但除非用户明确要求，不要主动泄露当前题目的标准答案。"
@@ -584,10 +613,21 @@ def chat(
     connection.execute(
         """
         INSERT INTO ai_messages
-            (conversation_id, role, content, profile_id, model_id)
-        VALUES (?, 'user', ?, ?, ?)
+            (conversation_id, role, content, attachments, profile_id, model_id)
+        VALUES (?, 'user', ?, ?, ?, ?, ?)
         """,
-        (conversation_id, request.message.strip(), request.profile_id, request.model),
+        (
+            conversation_id,
+            user_text or "(图片)",
+            json.dumps(
+                [{"name": item.name, "data_url": item.data_url} for item in attachments],
+                ensure_ascii=False,
+            )
+            if attachments
+            else None,
+            request.profile_id,
+            request.model,
+        ),
     )
     connection.execute(
         """
@@ -603,7 +643,7 @@ def chat(
     ).fetchone()
     title = existing["title"]
     if title == "新对话":
-        title = request.message.strip().replace("\n", " ")[:28] or "新对话"
+        title = user_text.replace("\n", " ")[:28] or "图片提问"
     connection.execute(
         """
         UPDATE ai_conversations
@@ -888,6 +928,8 @@ def wrong_analysis_status(
 def question_labels_status(
     year: int | None = None,
     paper_ids: str = "",
+    question_bank_profile_id: int | None = None,
+    run_id: str = "",
     connection: sqlite3.Connection = Depends(get_db),
 ) -> dict:
     try:
@@ -900,7 +942,27 @@ def question_labels_status(
         raise HTTPException(422, "paper_ids 必须是逗号分隔的数字") from error
     if len(selected_paper_ids) > 100 or any(value <= 0 for value in selected_paper_ids):
         raise HTTPException(422, "paper_ids 最多包含 100 个正整数")
-    return labeling_status(connection, year, selected_paper_ids)
+    try:
+        return labeling_status(
+            connection,
+            year,
+            selected_paper_ids,
+            question_bank_profile_id=question_bank_profile_id,
+            run_id=run_id.strip(),
+        )
+    except ValueError as error:
+        raise HTTPException(400, f"读取标注进度失败：{error}") from error
+
+
+@router.post("/question-labels/runs/{run_id}/pause")
+def pause_question_labels_run(
+    run_id: str,
+    connection: sqlite3.Connection = Depends(get_db),
+) -> dict:
+    try:
+        return pause_label_run(connection, run_id)
+    except LookupError as error:
+        raise HTTPException(404, str(error)) from error
 
 
 @router.post("/question-labels/next")
@@ -917,11 +979,14 @@ def label_questions_next(
             paper_ids=request.paper_ids,
             overwrite_unlocked=request.overwrite_unlocked,
             run_id=request.run_id.strip(),
+            question_bank_profile_id=request.question_bank_profile_id,
             profile_id=request.profile_id,
             model=request.model.strip() or None,
             max_tokens=request.max_tokens,
         )
     except (ValueError, LookupError, httpx.HTTPError, json.JSONDecodeError) as error:
+        if request.run_id.strip():
+            _update_run_status(connection, request.run_id.strip(), "failed", str(error))
         raise HTTPException(400, f"标注失败：{error}") from error
 
 
