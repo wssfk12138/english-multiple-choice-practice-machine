@@ -8,6 +8,7 @@ from ..database import get_db
 from ..schemas import AnswerUpdate, PracticeCreate
 from ..services.practice import (
     IncompleteSubmissionError,
+    abandon_session_if_empty,
     create_session,
     get_session,
     save_answer,
@@ -45,6 +46,15 @@ def create(
         return create_session(connection, request)
     except (ValueError, LookupError) as error:
         raise translate_error(error) from error
+
+
+@router.post("/sessions/{session_id}/abandon-if-empty")
+def abandon_if_empty(
+    session_id: int, connection: sqlite3.Connection = Depends(get_db)
+) -> dict:
+    result = abandon_session_if_empty(connection, session_id)
+    connection.commit()
+    return result
 
 
 @router.get("/sessions/{session_id}")

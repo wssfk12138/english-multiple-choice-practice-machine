@@ -256,6 +256,32 @@ def create_session(
     }
 
 
+def abandon_session_if_empty(
+    connection: sqlite3.Connection, session_id: int
+) -> dict[str, bool]:
+    answered = connection.execute(
+        """
+        SELECT COUNT(*) FROM practice_answers
+        WHERE session_id = ? AND TRIM(COALESCE(user_answer, '')) <> ''
+        """,
+        (session_id,),
+    ).fetchone()[0]
+    submitted = connection.execute(
+        "SELECT COUNT(*) FROM practice_unit_submissions WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()[0]
+    if answered > 0 or submitted > 0:
+        return {"kept": True}
+    connection.execute(
+        """
+        UPDATE practice_sessions SET status = 'abandoned', updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND status = 'active' AND mode = 'paper'
+        """,
+        (session_id,),
+    )
+    return {"kept": False}
+
+
 def get_session(connection: sqlite3.Connection, session_id: int) -> dict[str, Any]:
     session = connection.execute(
         "SELECT * FROM practice_sessions WHERE id = ?", (session_id,)
@@ -302,7 +328,9 @@ def get_session(connection: sqlite3.Connection, session_id: int) -> dict[str, An
             unit_id,
             shuffle_options=bool(session["shuffle_options"]),
             answer_orders=order_map,
-            include_answers=session["status"] == "submitted",
+            # Correct answers remain private to scoring and AI analysis. The
+            # practice response exposes only the user's answer and correctness.
+            include_answers=False,
             only_question_ids=only_by_unit.get(unit_id)
             if session["mode"] == "wrong"
             else None,
@@ -313,10 +341,6 @@ def get_session(connection: sqlite3.Connection, session_id: int) -> dict[str, An
             unit_submission = submission_map.get(unit_id)
             if (session["status"] == "submitted" or unit_submission) and answer:
                 question["is_correct"] = bool(answer["is_correct"])
-                question["answer"] = question.get("answer") or connection.execute(
-                    "SELECT answer FROM questions WHERE id = ?",
-                    (question["id"],),
-                ).fetchone()["answer"]
         unit_submission = submission_map.get(unit_id)
         unit_answer_rows = [
             answer_map[question["id"]]
