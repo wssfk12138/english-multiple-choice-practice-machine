@@ -32,6 +32,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate release inputs
+        shell: pwsh
+        env:
+          TAG: ${{ inputs.tag }}
+          VERSION_NAME: ${{ inputs.version_name }}
+          VERSION_CODE: ${{ inputs.version_code }}
+        run: |
+          if ($env:VERSION_NAME -notmatch '^[0-9A-Za-z][0-9A-Za-z._-]*$') {
+            throw "versionName 格式无效。"
+          }
+          if ($env:TAG -cne "v$($env:VERSION_NAME)") {
+            throw "Release 标签必须等于 v + versionName。"
+          }
+          if ($env:VERSION_CODE -notmatch '^[1-9][0-9]*$') {
+            throw "versionCode 必须为正整数。"
+          }
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -62,6 +79,11 @@ jobs:
             $source = Join-Path $item ""
             if (Test-Path $item -PathType Container) {
               robocopy $item (Join-Path $stage $item) /E /NFL /NDL /NJH /NJS | Out-Null
+              $robocopyExitCode = $LASTEXITCODE
+              if ($robocopyExitCode -ge 8) {
+                throw "robocopy failed for '$item' with exit code $robocopyExitCode"
+              }
+              $LASTEXITCODE = 0
             } else {
               Copy-Item $item $stage
             }
@@ -69,6 +91,7 @@ jobs:
           Compress-Archive -Path $stage -DestinationPath (Join-Path $env:RUNNER_TEMP "english-practice-machine-windows.zip")
 
       - name: Generate update manifest
+        id: manifest
         shell: pwsh
         env:
           TAG: ${{ inputs.tag }}
@@ -79,11 +102,12 @@ jobs:
           $zip = Get-Item (Join-Path $env:RUNNER_TEMP "english-practice-machine-windows.zip")
           $sha = (Get-FileHash $zip.FullName -Algorithm SHA256).Hash.ToLower()
           $repo = "${{ github.repository }}"
+          $versionCode = [int]$env:VERSION_CODE
           $manifest = [ordered]@{
             schemaVersion = 1
             windows = [ordered]@{
               versionName = $env:VERSION_NAME
-              versionCode = [int]$env:VERSION_CODE
+              versionCode = $versionCode
               packageUrl = "https://github.com/$repo/releases/download/$($env:TAG)/$($zip.Name)"
               packageSize = $zip.Length
               packageSha256 = $sha
@@ -112,6 +136,8 @@ jobs:
 
       - name: Summary
         shell: pwsh
+        env:
+          TAG: ${{ inputs.tag }}
         run: |
-          "Release ${{ inputs.tag }} 已创建。" | Out-File $env:GITHUB_STEP_SUMMARY -Append
-          "SHA-256: ${{ steps['Generate update manifest'].outputs.sha256 }}" | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          "Release $env:TAG 已创建。" | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          "SHA-256: ${{ steps.manifest.outputs.sha256 }}" | Out-File $env:GITHUB_STEP_SUMMARY -Append
