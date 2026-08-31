@@ -48,16 +48,19 @@ class AnswerUpdate(BaseModel):
 
 class AiSettingsUpdate(BaseModel):
     name: str = "本地模型"
+    adapter: str = "openai-chat"
     base_url: str
     api_key: str | None = None
     model: str
     temperature: float = 0.2
     max_tokens: int = Field(default=0, ge=0)
+    reasoning_effort: str = ""
     system_prompt: str = ""
 
 
 class AiModelListRequest(BaseModel):
     base_url: str
+    adapter: str = "openai-chat"
     api_key: str | None = None
     use_saved_api_key: bool = False
     profile_id: int | None = None
@@ -65,6 +68,7 @@ class AiModelListRequest(BaseModel):
 
 class AiProfileWrite(BaseModel):
     name: str = "本地模型"
+    adapter: str = "openai-chat"
     base_url: str = "http://127.0.0.1:11434/v1"
     api_key: str | None = None
     clear_api_key: bool = False
@@ -73,6 +77,7 @@ class AiProfileWrite(BaseModel):
     default_model: str = ""
     temperature: float = 0.2
     max_tokens: int = Field(default=0, ge=0)
+    reasoning_effort: str = ""
     system_prompt: str = ""
 
 
@@ -109,6 +114,7 @@ class AiChatRequest(BaseModel):
     model: str
     message: str = Field(default="", max_length=20000)
     attachments: list[AiChatAttachment] = Field(default_factory=list)
+    reasoning_effort: str | None = None
 
 
 class AiAnalyzeRequest(BaseModel):

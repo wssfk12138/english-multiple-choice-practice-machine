@@ -48,7 +48,7 @@ AI is used for more than chat. It can help analyze frequent mistakes, translate 
 
 ### 🔌 Complete model management
 
-Store multiple API profiles, fetch available models, test connections, select defaults, enable or disable profiles, and control which models appear in the selector. Local Ollama, LM Studio, and other OpenAI-compatible services are supported.
+Store multiple API profiles, fetch available models, test connections, select defaults, enable or disable profiles, and control which models appear in the selector. OpenAI Chat, OpenAI Responses, Anthropic, Google, Kiro, and Command Code protocols are built in; compatible services such as local Ollama and LM Studio can also be connected.
 
 ### 🔁 Practice freely
 
@@ -186,7 +186,9 @@ Model-management features:
 - Test connectivity and switch models inside a chat.
 - Create, switch, and delete multiple conversation sessions.
 
-OpenAI-compatible services can be used, including local Ollama, LM Studio, and other services exposing a compatible `/v1` API. Exact capabilities depend on the configured provider and model.
+Six protocol adapters are built in: `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, and `command-code`. They translate messages, image attachments, reasoning effort, and response text for each protocol. Local Ollama, LM Studio, and similar services can use the appropriate OpenAI protocol; exact capabilities depend on the configured service and model.
+
+Current verification covers local request/response contracts for all six protocols, reasoning-effort mapping, backend tests, and the frontend build. No requests have yet been sent to live endpoints for all six provider families, so this is not a claim of end-to-end provider certification.
 
 AI-assisted workflows include:
 

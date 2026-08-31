@@ -59,6 +59,7 @@ const messages = ref<ChatMessage[]>([])
 const selectedModel = ref(localStorage.getItem('linjian-ai-model') || '')
 const conversationId = ref<number | null>(null)
 const input = ref('')
+const reasoningEffort = ref<'' | 'low' | 'medium' | 'high'>('')
 const loading = ref(false)
 const loadingData = ref(false)
 const historyOpen = ref(true)
@@ -72,8 +73,6 @@ const visionError = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
 let attachmentSeq = 0
 const MAX_ATTACHMENTS = 4
-// data URL 为 ASCII base64，长度近似字节数；后端会做同样的上限校验。
-const MAX_ATTACHMENT_DATA_URL_CHARS = 8 * 1024 * 1024
 
 const VISION_ERROR_PATTERN = /(image|vision|multimodal|multi-modal|unsupported|invalid content|content part|does not support|not support)/i
 
@@ -99,10 +98,6 @@ function onFilesChosen(event: Event) {
     const captured = ++attachmentSeq
     compressImage(file)
       .then(dataUrl => {
-        if (dataUrl.length > MAX_ATTACHMENT_DATA_URL_CHARS) {
-          error.value = '单张图片附件过大（超过 8 MiB），请裁剪或压缩后再试'
-          return
-        }
         attachments.value.push({ id: captured, name: file.name, size: file.size, dataUrl })
       })
       .catch(() => undefined)
@@ -307,6 +302,7 @@ async function sendMessage() {
         profile_id: selection.profile_id,
         model: selection.model_id,
         message: text,
+        ...(reasoningEffort.value ? { reasoning_effort: reasoningEffort.value } : {}),
         ...(attachmentPayload.length ? { attachments: attachmentPayload } : {}),
       }),
       signal: controller.signal,
@@ -383,9 +379,7 @@ onBeforeUnmount(() => {
   <div class="ai-assistant-page">
     <header class="ai-page-head">
       <div>
-        <span class="eyebrow">AI STUDY COMPANION</span>
         <h1>AI 学习助手</h1>
-        <p class="lead">长难句、选项辨析、词义和学习方法，都可以在这里随时提问。</p>
       </div>
       <button class="button secondary" type="button" @click="openSettings">
         <Settings :size="17" />模型与 API 设置
@@ -455,6 +449,10 @@ onBeforeUnmount(() => {
                   {{ model.display_name || model.model_id }}
                 </option>
               </optgroup>
+            </select>
+            <label for="assistant-reasoning">推理强度</label>
+            <select id="assistant-reasoning" v-model="reasoningEffort" :disabled="loading">
+              <option value="">跟随配置</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option>
             </select>
           </div>
         </header>

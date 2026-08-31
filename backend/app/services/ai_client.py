@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from ..security import unprotect_text
+from .ai_adapters import adapter_for, normalize_reasoning_effort
 
 
 _TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
@@ -114,10 +115,12 @@ def get_ai_settings(connection: sqlite3.Connection) -> dict[str, Any]:
     return {
         "id": profile["id"],
         "name": profile["name"],
+        "adapter": profile.get("adapter", "openai-chat"),
         "base_url": profile["base_url"],
         "model": profile["default_model"],
         "temperature": profile["temperature"],
         "max_tokens": profile["max_tokens"],
+        "reasoning_effort": profile.get("reasoning_effort", ""),
         "system_prompt": profile["system_prompt"],
         "has_api_key": profile["has_api_key"],
     }
@@ -188,6 +191,7 @@ def list_available_models(
     api_key: str | None = None,
     use_saved_api_key: bool = False,
     profile_id: int | None = None,
+    adapter: str = "openai-chat",
 ) -> dict[str, Any]:
     normalized = _normalize_base_url(base_url)
     key = (api_key or "").strip()
@@ -201,17 +205,19 @@ def list_available_models(
             raise ValueError("已保存的 API Key 只能用于原接口地址")
         key = saved["api_key"] or ""
 
-    headers = {"Accept": "application/json"}
-    if key:
-        headers["Authorization"] = f"Bearer {key}"
+    definition = adapter_for(adapter)
+    headers = {"Accept": "application/json", **definition.headers(key)}
+    endpoints = definition.model_endpoints(normalized)
+    if not endpoints:
+        return {"models": definition.parse_models(None), "source": definition.id, "endpoint": "static"}
 
     failures: list[str] = []
     with httpx.Client(timeout=15, follow_redirects=True) as client:
-        for provider, url in _model_list_urls(normalized):
+        for provider, url in endpoints:
             try:
                 response = client.get(url, headers=headers)
                 response.raise_for_status()
-                models = _parse_model_list(response.json())
+                models = definition.parse_models(response.json())
                 return {
                     "models": models,
                     "source": provider,
@@ -230,6 +236,7 @@ def chat_completion(
     profile_id: int | None = None,
     model: str | None = None,
     max_tokens: int | None = None,
+    reasoning_effort: str | None = None,
 ) -> str:
     settings = (
         _profile_with_key(connection, profile_id)
@@ -241,18 +248,20 @@ def chat_completion(
         raise ValueError("请先填写 API 地址和模型名称")
     if not settings.get("enabled", True):
         raise ValueError("所选 API 配置当前未启用")
-    url = settings["base_url"].rstrip("/") + "/chat/completions"
-    headers = {"Content-Type": "application/json"}
-    if settings["api_key"]:
-        headers["Authorization"] = f"Bearer {settings['api_key']}"
-    payload: dict[str, Any] = {
-        "model": selected_model,
-        "messages": messages,
-        "temperature": settings["temperature"],
-        "stream": False,
-    }
-    if response_format:
-        payload["response_format"] = response_format
+    definition = adapter_for(settings.get("adapter"))
+    key = settings.get("api_key") or ""
+    if definition.id == "kiro" and not key.startswith("ksk_"):
+        raise ValueError("Kiro 需要以 ksk_ 开头的 API Key；本应用不导入 OpenCodex/Kiro CLI 的 OAuth 会话")
+    url = definition.chat_url(settings["base_url"], selected_model)
+    headers = {"Content-Type": "application/json", **definition.headers(key)}
+    effort = normalize_reasoning_effort(
+        settings.get("reasoning_effort") if reasoning_effort is None else reasoning_effort
+    )
+    payload = definition.serialize(
+        selected_model, messages, temperature=settings["temperature"],
+        max_tokens=max_tokens, response_format=response_format,
+        reasoning_effort=effort if definition.supports_reasoning else "",
+    )
     def post_with_retry(client: httpx.Client, request_payload: dict[str, Any]) -> httpx.Response:
         last_response: httpx.Response | None = None
         last_error: httpx.HTTPError | None = None
@@ -286,27 +295,18 @@ def chat_completion(
 
     with httpx.Client(timeout=120) as client:
         response = post_with_retry(client, payload)
-        if response.status_code in {400, 404, 422} and response_format:
+        if (
+            definition.id == "openai-chat"
+            and response.status_code in {400, 404, 422}
+            and response_format
+        ):
             # Some OpenAI-compatible local APIs do not implement
             # response_format. The prompt still requests strict JSON.
             payload.pop("response_format", None)
             response = post_with_retry(client, payload)
         response.raise_for_status()
-        data = response.json()
-    try:
-        message = data["choices"][0]["message"]
-    except (KeyError, IndexError, TypeError) as error:
-        raise ValueError("模型接口返回格式不兼容") from error
-    content = _extract_message_content(message.get("content"))
-    if not content:
-        finish_reason = data["choices"][0].get("finish_reason")
-        detail = (
-            "，供应商可能提前终止了回复；请重试或切换模型/API 配置"
-            if finish_reason in {"length", "stop"}
-            else ""
-        )
-        raise ValueError(f"模型没有返回可显示的正文{detail}")
-    return content
+        data: Any = response.content if definition.response_kind == "bytes" else response.text if definition.response_kind == "text" else response.json()
+    return definition.parse_text(data)
 
 
 def _extract_message_content(value: Any) -> str:

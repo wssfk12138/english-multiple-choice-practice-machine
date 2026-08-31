@@ -29,6 +29,7 @@ from ..services.ai_client import (
     list_available_models,
     parse_json_response,
 )
+from ..services.ai_adapters import normalize_adapter, normalize_reasoning_effort
 from ..services.docx_parser import validate_draft
 from ..services.question_labeling import (
     _update_run_status,
@@ -131,18 +132,20 @@ def update_settings(
     connection.execute(
         """
         UPDATE ai_profiles
-        SET name = ?, base_url = ?, api_key_encrypted = ?, default_model = ?,
-            temperature = ?, max_tokens = ?, system_prompt = ?, is_default = 1,
+        SET name = ?, adapter = ?, base_url = ?, api_key_encrypted = ?, default_model = ?,
+            temperature = ?, max_tokens = ?, reasoning_effort = ?, system_prompt = ?, is_default = 1,
             updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
         """,
         (
             request.name,
+            normalize_adapter(request.adapter),
             request.base_url.rstrip("/"),
             encrypted,
             request.model,
             request.temperature,
             request.max_tokens,
+            normalize_reasoning_effort(request.reasoning_effort),
             request.system_prompt,
             profile["id"],
         ),
@@ -174,6 +177,7 @@ def read_available_models(
             api_key=request.api_key,
             use_saved_api_key=request.use_saved_api_key,
             profile_id=request.profile_id,
+            adapter=request.adapter,
         )
     except (ValueError, LookupError, httpx.HTTPError) as error:
         raise HTTPException(400, str(error)) from error
@@ -248,12 +252,13 @@ def create_profile(
     cursor = connection.execute(
         """
         INSERT INTO ai_profiles
-            (name, base_url, api_key_encrypted, enabled, is_default,
-             default_model, temperature, max_tokens, system_prompt)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (name, adapter, base_url, api_key_encrypted, enabled, is_default,
+             default_model, temperature, max_tokens, reasoning_effort, system_prompt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             request.name.strip(),
+            normalize_adapter(request.adapter),
             request.base_url.strip().rstrip("/"),
             encrypted,
             int(request.enabled),
@@ -261,6 +266,7 @@ def create_profile(
             request.default_model.strip(),
             request.temperature,
             request.max_tokens,
+            normalize_reasoning_effort(request.reasoning_effort),
             request.system_prompt,
         ),
     )
@@ -301,13 +307,14 @@ def update_profile(
     connection.execute(
         """
         UPDATE ai_profiles
-        SET name = ?, base_url = ?, api_key_encrypted = ?, enabled = ?,
+        SET name = ?, adapter = ?, base_url = ?, api_key_encrypted = ?, enabled = ?,
             is_default = ?, default_model = ?, temperature = ?,
-            max_tokens = ?, system_prompt = ?, updated_at = CURRENT_TIMESTAMP
+            max_tokens = ?, reasoning_effort = ?, system_prompt = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
         """,
         (
             request.name.strip(),
+            normalize_adapter(request.adapter),
             request.base_url.strip().rstrip("/"),
             encrypted,
             int(request.enabled),
@@ -315,6 +322,7 @@ def update_profile(
             request.default_model.strip(),
             request.temperature,
             request.max_tokens,
+            normalize_reasoning_effort(request.reasoning_effort),
             request.system_prompt,
             profile_id,
         ),
@@ -362,6 +370,7 @@ def sync_profile_models(
             base_url=profile["base_url"],
             use_saved_api_key=bool(profile["api_key_encrypted"]),
             profile_id=profile_id,
+            adapter=profile["adapter"],
         )
     except (ValueError, LookupError, httpx.HTTPError) as error:
         raise HTTPException(400, str(error)) from error
@@ -606,6 +615,7 @@ def chat(
             [{"role": "system", "content": system_prompt}, *messages],
             profile_id=request.profile_id,
             model=request.model,
+            reasoning_effort=request.reasoning_effort,
         )
     except (ValueError, LookupError, httpx.HTTPError) as error:
         raise HTTPException(400, f"对话失败：{error}") from error
@@ -614,7 +624,7 @@ def chat(
         """
         INSERT INTO ai_messages
             (conversation_id, role, content, attachments, profile_id, model_id)
-        VALUES (?, 'user', ?, ?, ?, ?, ?)
+        VALUES (?, 'user', ?, ?, ?, ?)
         """,
         (
             conversation_id,

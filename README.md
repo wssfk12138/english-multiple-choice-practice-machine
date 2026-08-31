@@ -54,7 +54,7 @@
 
 ### 🔌 完整的模型配置管理
 
-支持保存多个 API 配置、自动拉取可用模型、测试连接、设置默认模型、启用或停用 API，以及控制模型是否出现在选择器中。兼容本地 Ollama、LM Studio 和其他 OpenAI-compatible API 服务。
+支持保存多个 API 配置、自动拉取可用模型、测试连接、设置默认模型、启用或停用 API，以及控制模型是否出现在选择器中。内置 OpenAI Chat、OpenAI Responses、Anthropic、Google、Kiro 和 Command Code 六种协议适配，本地 Ollama、LM Studio 等兼容服务也可接入。
 
 ### 🔁 自由刷题
 
@@ -192,7 +192,9 @@ AI 助手是可选增强功能，不启用模型也可以完成全部基础刷�
 - 测试 API 连接，并在聊天窗口内切换模型。
 - 保存多个对话，支持新建、切换和删除会话。
 
-支持的 OpenAI-compatible 服务包括本地 Ollama、LM Studio，以及其他提供兼容 `/v1` 接口的服务。具体模型能力取决于用户配置的服务。
+内置 `openai-chat`、`openai-responses`、`anthropic`、`google`、`kiro` 和 `command-code` 六种协议适配器，可按协议转换消息、图片附件、推理强度和响应文本。本地 Ollama、LM Studio 等兼容服务可使用相应的 OpenAI 协议，具体能力取决于用户配置的服务和模型。
+
+当前验证覆盖六种协议的本地请求/响应契约、推理强度映射、后端测试和前端构建；尚未向六类真实供应商端点发起请求，因此不能视为全部服务的真实连通性认证。
 
 AI 可用于：
 
