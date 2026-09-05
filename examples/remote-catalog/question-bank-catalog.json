@@ -1,27 +1,103 @@
 {
- "catalogVersion": 1,
- "packages": [
-  {
-   "packageId": "wssfk.cet4.complete",
-   "title": "大学英语四级（CET-4） 完整真题题库",
-   "contentVersion": "1.2.0",
-   "fileName": "cet4-complete-v1.2.0.esq",
-   "downloadUrl": "https://github.com/wssfk12138/english-multiple-choice-practice-machine/releases/download/question-banks-v1.2.0/cet4-complete-v1.2.0.esq",
-   "sha256": "976842e6cfd96c68178ab4a30cacaf10c435d53a19218b05a4d0142279d03f98",
-   "size": 429043776,
-   "license": "仅在个人学习范围使用；考生回忆整理版，再分发前请确认原始题目与音频许可。",
-   "years": [2017, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
-  },
-  {
-   "packageId": "wssfk.cet6.complete",
-   "title": "大学英语六级（CET-6） 完整真题题库",
-   "contentVersion": "1.2.0",
-   "fileName": "cet6-complete-v1.2.0.esq",
-   "downloadUrl": "https://github.com/wssfk12138/english-multiple-choice-practice-machine/releases/download/question-banks-v1.2.0/cet6-complete-v1.2.0.esq",
-   "sha256": "f7c5a8b9fe0e2c1cf614a4c1eddef5244e4ca6fc456f98824923b3a8ac81a250",
-   "size": 844861464,
-   "license": "仅在个人学习范围使用；考生回忆整理版，再分发前请确认原始题目与音频许可。",
-   "years": [2020, 2021, 2022, 2023, 2024, 2025, 2026]
-  }
- ]
+  "catalogVersion": 1,
+  "updatedAt": "2026-09-05T13:12:35.136523+00:00",
+  "packages": [
+    {
+      "packageId": "wssfk.postgraduate-english-one.2010-2026",
+      "title": "2002、2010-2026 年考研英语（一）客观题题库",
+      "contentVersion": "1.1.0",
+      "fileName": "postgraduate-english-one-2002-2010-2026-v1.1.0.esq",
+      "downloadUrl": "https://github.com/wssfk12138/english-multiple-choice-practice-machine/releases/download/question-banks-v1.2.0/postgraduate-english-one-2002-2010-2026-v1.1.0.esq",
+      "sha256": "faebfd9c415d889054b530598f4184f44c17981eaf52bdd0238068b6111d59ba",
+      "size": 338288,
+      "license": "NOASSERTION",
+      "years": [
+        2002,
+        2010,
+        2011,
+        2012,
+        2013,
+        2014,
+        2015,
+        2016,
+        2017,
+        2018,
+        2019,
+        2020,
+        2021,
+        2022,
+        2023,
+        2024,
+        2025,
+        2026
+      ]
+    },
+    {
+      "packageId": "local.english-practice.postgraduate-english-two.2010-2025",
+      "title": "考研英语（二）客观题题库（2010-2025，含已锁定智能标注）",
+      "contentVersion": "1.1.2",
+      "fileName": "postgraduate-english-two-2010-2025-v1.1.2.esq",
+      "downloadUrl": "https://github.com/wssfk12138/english-multiple-choice-practice-machine/releases/download/question-banks-v1.2.0/postgraduate-english-two-2010-2025-v1.1.2.esq",
+      "sha256": "9fbf271a5243c8dd0042f9c501dd74e6865ce6639f458460982fe30c326e34c8",
+      "size": 294673,
+      "license": "NOASSERTION",
+      "years": [
+        2010,
+        2011,
+        2012,
+        2013,
+        2014,
+        2015,
+        2016,
+        2017,
+        2018,
+        2019,
+        2020,
+        2021,
+        2022,
+        2023,
+        2024,
+        2025
+      ]
+    },
+    {
+      "packageId": "wssfk.cet4.complete",
+      "title": "大学英语四级（CET-4） 完整真题题库",
+      "contentVersion": "1.2.0",
+      "fileName": "cet4-complete-v1.2.0.esq",
+      "downloadUrl": "https://github.com/wssfk12138/english-multiple-choice-practice-machine/releases/download/question-banks-v1.2.0/cet4-complete-v1.2.0.esq",
+      "sha256": "976842e6cfd96c68178ab4a30cacaf10c435d53a19218b05a4d0142279d03f98",
+      "size": 429043776,
+      "license": "NOASSERTION",
+      "years": [
+        2017,
+        2020,
+        2021,
+        2022,
+        2023,
+        2024,
+        2025,
+        2026
+      ]
+    },
+    {
+      "packageId": "wssfk.cet6.complete",
+      "title": "大学英语六级（CET-6） 完整真题题库",
+      "contentVersion": "1.2.0",
+      "fileName": "cet6-complete-v1.2.0.esq",
+      "downloadUrl": "https://github.com/wssfk12138/english-multiple-choice-practice-machine/releases/download/question-banks-v1.2.0/cet6-complete-v1.2.0.esq",
+      "sha256": "f7c5a8b9fe0e2c1cf614a4c1eddef5244e4ca6fc456f98824923b3a8ac81a250",
+      "size": 844861464,
+      "license": "NOASSERTION",
+      "years": [
+        2020,
+        2021,
+        2022,
+        2023,
+        2024,
+        2025,
+        2026
+      ]
+    }
+  ]
 }
