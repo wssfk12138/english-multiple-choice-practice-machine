@@ -103,6 +103,33 @@ class BundledQuestionBankTests(unittest.TestCase):
             self.assertEqual(connection.execute("SELECT COUNT(*) AS count FROM papers").fetchone()["count"], 34)
             self.assertEqual(connection.execute("SELECT COUNT(*) AS count FROM questions").fetchone()["count"], 1525)
 
+    def test_missing_package_files_are_skipped_without_failing(self) -> None:
+        from backend.app.database import connect, initialize_database
+        from backend.app.services.bundled_banks import install_bundled_question_banks
+
+        initialize_database()
+        with TemporaryDirectory(ignore_cleanup_errors=True) as empty_dir:
+            with patch("backend.app.services.bundled_banks.BUNDLED_BANK_DIR", Path(empty_dir)):
+                results = install_bundled_question_banks()
+
+        self.assertEqual(
+            results,
+            [
+                {"fileName": "postgraduate-english-one.esq", "status": "missing"},
+                {"fileName": "postgraduate-english-two.esq", "status": "missing"},
+            ],
+        )
+        with connect() as connection:
+            profile_names = [
+                row["name"]
+                for row in connection.execute("SELECT name FROM question_bank_profiles").fetchall()
+            ]
+            self.assertEqual(profile_names, ["考研英语一"])
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) AS count FROM papers").fetchone()["count"],
+                0,
+            )
+
     def test_existing_user_paper_is_not_replaced(self) -> None:
         from backend.app.database import connect, initialize_database
         from backend.app.services.bundled_banks import install_bundled_question_banks

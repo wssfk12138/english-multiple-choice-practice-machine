@@ -7,6 +7,7 @@ answer handling, and label import rules as a user-imported package.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,8 @@ from ..config import ROOT_DIR
 from ..database import connect
 from .esq import load_esq_package, publish_package
 
+
+logger = logging.getLogger(__name__)
 
 BUNDLED_BANKS: tuple[tuple[str, str], ...] = (
     ("postgraduate-english-one.esq", "考研英语一"),
@@ -71,13 +74,17 @@ def install_bundled_question_banks() -> list[dict[str, Any]]:
 
     The package identity and content version are the idempotency key. Existing
     user data is never replaced, and a partially failed package is rolled back.
+    Missing starter packages are reported as ``missing`` and skipped so a
+    packaging error cannot prevent the application from starting.
     """
 
     results: list[dict[str, Any]] = []
     for filename, profile_name in BUNDLED_BANKS:
         package_path = BUNDLED_BANK_DIR / filename
         if not package_path.is_file():
-            raise RuntimeError(f"内置题库文件缺失：{filename}")
+            logger.warning("内置题库文件缺失，已跳过：%s", filename)
+            results.append({"fileName": filename, "status": "missing"})
+            continue
         package = load_esq_package(package_path)
         manifest = package["manifest"]
         package_id = manifest["packageId"]
