@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import socket
+import sys
 import threading
 import time
 import urllib.request
@@ -10,6 +12,14 @@ import uvicorn
 
 
 URL = "http://127.0.0.1:8765"
+
+
+def ensure_windowless_stdio() -> None:
+    # pythonw.exe（无控制台）把 std 流设为 None，uvicorn 默认日志 formatter
+    # 调用 sys.stdout.isatty() 时会崩溃，进程静默退出；补上 devnull 流兜底。
+    for name in ("stdout", "stderr"):
+        if getattr(sys, name) is None:
+            setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))
 
 
 def app_is_running() -> bool:
@@ -40,6 +50,7 @@ def open_when_ready() -> None:
 
 
 def main() -> int:
+    ensure_windowless_stdio()
     if app_is_running():
         webbrowser.open(URL)
         return 0

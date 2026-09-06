@@ -63,5 +63,26 @@ class RunAppLifecycleTests(unittest.TestCase):
         stop_lan.assert_called_once_with()
 
 
+class RunAppStdioTests(unittest.TestCase):
+    def test_ensure_windowless_stdio_replaces_missing_streams(self) -> None:
+        with patch.object(run_app.sys, "stdout", None), patch.object(
+            run_app.sys, "stderr", None
+        ):
+            run_app.ensure_windowless_stdio()
+            self.assertIsNotNone(run_app.sys.stdout)
+            self.assertIsNotNone(run_app.sys.stderr)
+            run_app.sys.stdout.close()
+            run_app.sys.stderr.close()
+
+    def test_ensure_windowless_stdio_keeps_real_streams(self) -> None:
+        sentinel_out, sentinel_err = object(), object()
+        with patch.object(run_app.sys, "stdout", sentinel_out), patch.object(
+            run_app.sys, "stderr", sentinel_err
+        ):
+            run_app.ensure_windowless_stdio()
+            self.assertIs(run_app.sys.stdout, sentinel_out)
+            self.assertIs(run_app.sys.stderr, sentinel_err)
+
+
 if __name__ == "__main__":
     unittest.main()
