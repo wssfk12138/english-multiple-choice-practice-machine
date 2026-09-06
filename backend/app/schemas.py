@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+LAN_SYNC_MAX_CHANGE_ROWS = 10_000
+LAN_SYNC_MAX_REQUEST_BYTES = 16 * 1024 * 1024
 
 
 class PracticeCreate(BaseModel):
@@ -215,3 +220,40 @@ class VocabularyUpdate(BaseModel):
 
 class VocabularyReview(BaseModel):
     rating: Literal["again", "hard", "mastered"]
+
+
+class LanSyncHandshake(BaseModel):
+    passcode: str = Field(min_length=1, max_length=64)
+    device_id: str = Field(default="", max_length=128)
+    profile_names: list[str] = Field(default_factory=list, max_length=200)
+
+
+class LanSyncPullRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=128)
+    tables: list[str] = Field(default_factory=list, max_length=64)
+    cursor: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    tombstone_cursor: dict[str, Any] = Field(default_factory=dict)
+
+
+class LanSyncPushRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=128)
+    changes: dict[str, list[dict[str, Any]]] = Field(default_factory=dict, max_length=64)
+    tombstones: list[dict[str, Any]] = Field(default_factory=list, max_length=10_000)
+
+    @model_validator(mode="after")
+    def validate_payload_bounds(self):
+        change_rows = sum(len(rows) for rows in self.changes.values())
+        if change_rows > LAN_SYNC_MAX_CHANGE_ROWS:
+            raise ValueError(
+                f"局域网同步单次最多接收 {LAN_SYNC_MAX_CHANGE_ROWS} 条变更"
+            )
+        encoded_size = len(
+            json.dumps(
+                self.model_dump(),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        if encoded_size > LAN_SYNC_MAX_REQUEST_BYTES:
+            raise ValueError("局域网同步单次请求不能超过 16 MiB")
+        return self

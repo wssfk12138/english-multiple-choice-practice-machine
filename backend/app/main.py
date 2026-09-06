@@ -20,6 +20,7 @@ from .routers import (
     question_bank_profiles,
     question_banks,
     remote_question_banks,
+    sync,
     updates,
     vocabulary,
     wrong,
@@ -73,6 +74,7 @@ app.include_router(remote_question_banks.router, prefix="/api")
 app.include_router(updates.router, prefix="/api")
 app.include_router(ai.router, prefix="/api")
 app.include_router(vocabulary.router, prefix="/api")
+app.include_router(sync.router, prefix="/api")
 
 
 @app.get("/api/health")
