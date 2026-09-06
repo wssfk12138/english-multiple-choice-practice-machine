@@ -210,7 +210,7 @@ onMounted(loadStatus)
       <div class="lan-sync-addresses">
         <strong>手机端主机地址</strong>
         <code v-for="url in lanSync.host_urls" :key="url">{{ url }}</code>
-        <span v-if="!lanSync.host_urls.length" class="lead">{{ lanSync.listening ? '未检测到可用的局域网 IPv4 地址' : '主机尚未监听' }}</span>
+        <span v-if="!lanSync.host_urls.length" class="lead">{{ lanSync.listening ? '未检测到可用的局域网 IPv4 地址' : (lanSync.enabled ? '同步主机未在监听，端口 8766 可能被占用，可尝试重新生成口令' : '局域网同步未开启，点击下方按钮开启') }}</span>
       </div>
       <div class="lan-sync-passcode">
         <strong>配对口令</strong>
