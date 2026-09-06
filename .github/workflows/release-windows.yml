@@ -72,7 +72,7 @@ jobs:
           $stage = Join-Path $env:RUNNER_TEMP "package\english-practice-machine"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           $items = @(
-            "backend", "frontend\dist", "run_app.py", "start.ps1", "setup.ps1",
+            "backend", "frontend\dist", "examples\bundled-banks", "run_app.py", "start.ps1", "setup.ps1",
             "requirements.txt", "README.md", "README.en.md", "LICENSE", "NOTICE.md", "AUTHORS.md"
           )
           foreach ($item in $items) {
