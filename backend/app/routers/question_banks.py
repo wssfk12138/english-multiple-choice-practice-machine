@@ -131,7 +131,7 @@ async def upload_question_bank(
                     break
                 size += len(chunk)
                 if size > MAX_PACKAGE_BYTES:
-                    raise _error("FILE_TOO_LARGE", "ESQ 文件不能超过 100 MiB")
+                    raise _error("FILE_TOO_LARGE", "ESQ 文件不能超过 2 GiB")
                 target.write(chunk)
         return create_question_bank_import(connection, stored_path, file.filename, profile_id)
     except EsqValidationError as error:

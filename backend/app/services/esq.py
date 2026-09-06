@@ -13,8 +13,8 @@ from typing import Any
 from ..config import QUESTION_BANK_DIR
 
 
-MAX_PACKAGE_BYTES = 100 * 1024 * 1024
-MAX_UNPACKED_BYTES = 300 * 1024 * 1024
+MAX_PACKAGE_BYTES = 2 * 1024 * 1024 * 1024
+MAX_UNPACKED_BYTES = 4 * 1024 * 1024 * 1024
 MAX_FILES = 1000
 MAX_JSON_BYTES = 20 * 1024 * 1024
 MAX_TEXT_LENGTH = 100_000
@@ -445,7 +445,7 @@ def _validate_paper(
 
 def load_esq_package(path: Path) -> dict[str, Any]:
     if path.stat().st_size > MAX_PACKAGE_BYTES:
-        raise EsqValidationError([{"path": "file", "reason": "ESQ 文件超过 100 MiB"}])
+        raise EsqValidationError([{"path": "file", "reason": "ESQ 文件超过 2 GiB"}])
     if not zipfile.is_zipfile(path):
         raise EsqValidationError([{"path": "file", "reason": "不是有效的 ESQ/ZIP 文件"}])
     details: list[dict[str, str]] = []
@@ -471,7 +471,7 @@ def load_esq_package(path: Path) -> dict[str, Any]:
                 if info.compress_size and info.file_size / info.compress_size > 100:
                     _error(details, f"archive.{name}", "压缩比过高")
             if total_size > MAX_UNPACKED_BYTES:
-                _error(details, "archive", "解压后总大小超过 300 MiB")
+                _error(details, "archive", "解压后总大小超过 4 GiB")
             if "manifest.json" not in member_names:
                 _error(details, "manifest.json", "缺少 manifest.json")
             if details:
