@@ -1,15 +1,15 @@
 {
   "catalogVersion": 1,
-  "updatedAt": "2026-09-05T13:12:35.136523+00:00",
+  "updatedAt": "2026-09-20T07:56:29.952178+00:00",
   "packages": [
     {
       "packageId": "wssfk.postgraduate-english-one.2010-2026",
       "title": "2002、2010-2026 年考研英语（一）客观题题库",
-      "contentVersion": "1.1.0",
-      "fileName": "postgraduate-english-one-2002-2010-2026-v1.1.0.esq",
-      "downloadUrl": "https://github.com/wssfk12138/english-multiple-choice-practice-machine/releases/download/question-banks-v1.2.0/postgraduate-english-one-2002-2010-2026-v1.1.0.esq",
-      "sha256": "faebfd9c415d889054b530598f4184f44c17981eaf52bdd0238068b6111d59ba",
-      "size": 338288,
+      "contentVersion": "1.1.1",
+      "fileName": "postgraduate-english-one-2002-2010-2026-v1.1.1.esq",
+      "downloadUrl": "https://github.com/wssfk12138/english-question-banks/releases/download/question-banks-2026-09-20/postgraduate-english-one-2002-2010-2026-v1.1.1.esq",
+      "sha256": "ee170cbec88cff8372652f1f3e9851bc989f94b1e3a08e97fbc9303b0093a987",
+      "size": 329859,
       "license": "NOASSERTION",
       "years": [
         2002,
@@ -35,11 +35,11 @@
     {
       "packageId": "local.english-practice.postgraduate-english-two.2010-2025",
       "title": "考研英语（二）客观题题库（2010-2025，含已锁定智能标注）",
-      "contentVersion": "1.1.2",
-      "fileName": "postgraduate-english-two-2010-2025-v1.1.2.esq",
-      "downloadUrl": "https://github.com/wssfk12138/english-multiple-choice-practice-machine/releases/download/question-banks-v1.2.0/postgraduate-english-two-2010-2025-v1.1.2.esq",
-      "sha256": "9fbf271a5243c8dd0042f9c501dd74e6865ce6639f458460982fe30c326e34c8",
-      "size": 294673,
+      "contentVersion": "1.1.3",
+      "fileName": "postgraduate-english-two-2010-2025-v1.1.3.esq",
+      "downloadUrl": "https://github.com/wssfk12138/english-question-banks/releases/download/question-banks-2026-09-20/postgraduate-english-two-2010-2025-v1.1.3.esq",
+      "sha256": "63b15409bbfeea674e5917592d6eece399d978feab38a5439119c07a9afc21be",
+      "size": 286456,
       "license": "NOASSERTION",
       "years": [
         2010,
@@ -63,11 +63,11 @@
     {
       "packageId": "wssfk.cet4.complete",
       "title": "大学英语四级（CET-4） 完整真题题库",
-      "contentVersion": "1.2.0",
-      "fileName": "cet4-complete-v1.2.0.esq",
-      "downloadUrl": "https://github.com/wssfk12138/english-multiple-choice-practice-machine/releases/download/question-banks-v1.2.0/cet4-complete-v1.2.0.esq",
-      "sha256": "976842e6cfd96c68178ab4a30cacaf10c435d53a19218b05a4d0142279d03f98",
-      "size": 429043776,
+      "contentVersion": "1.2.1",
+      "fileName": "cet4-complete-v1.2.1.esq",
+      "downloadUrl": "https://github.com/wssfk12138/english-question-banks/releases/download/question-banks-2026-09-20/cet4-complete-v1.2.1.esq",
+      "sha256": "bba6bf1af0ff988e98bae4e6d27dbdd0ee0ce29d3da72903758853ceea2dc048",
+      "size": 429044793,
       "license": "NOASSERTION",
       "years": [
         2017,
@@ -83,11 +83,11 @@
     {
       "packageId": "wssfk.cet6.complete",
       "title": "大学英语六级（CET-6） 完整真题题库",
-      "contentVersion": "1.2.0",
-      "fileName": "cet6-complete-v1.2.0.esq",
-      "downloadUrl": "https://github.com/wssfk12138/english-multiple-choice-practice-machine/releases/download/question-banks-v1.2.0/cet6-complete-v1.2.0.esq",
-      "sha256": "f7c5a8b9fe0e2c1cf614a4c1eddef5244e4ca6fc456f98824923b3a8ac81a250",
-      "size": 844861464,
+      "contentVersion": "1.2.1",
+      "fileName": "cet6-complete-v1.2.1.esq",
+      "downloadUrl": "https://github.com/wssfk12138/english-question-banks/releases/download/question-banks-2026-09-20/cet6-complete-v1.2.1.esq",
+      "sha256": "0adc274514723bfdace623d72646fd8dd96a58dfc9a1efe7464d2c09077244b2",
+      "size": 844864930,
       "license": "NOASSERTION",
       "years": [
         2020,
