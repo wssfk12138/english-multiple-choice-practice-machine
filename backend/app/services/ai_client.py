@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 
-from ..security import unprotect_text
+from . import model_keys
 from .ai_adapters import adapter_for, normalize_reasoning_effort
 
 
@@ -43,7 +43,7 @@ def get_ai_profile(
         ).fetchone()
     if row is None:
         raise LookupError("API 配置不存在")
-    return _public_profile(row)
+    return {**_public_profile(row), **model_keys.summary(connection, row)}
 
 
 def _profile_with_key(
@@ -57,7 +57,8 @@ def _profile_with_key(
     if row is None:
         raise LookupError("API 配置不存在")
     payload = dict(row)
-    payload["api_key"] = unprotect_text(payload.pop("api_key_encrypted"))
+    payload.pop("api_key_encrypted", None)
+    payload["api_key"] = model_keys.selected(connection, row)
     payload["enabled"] = bool(payload["enabled"])
     payload["is_default"] = bool(payload["is_default"])
     return payload

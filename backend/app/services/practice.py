@@ -3,13 +3,15 @@ from __future__ import annotations
 import json
 import random
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from ..database import get_active_profile_id
 from ..schemas import PracticeCreate
 from .questions import parse_json, serialize_unit
+from .practice_snapshots import read_snapshot, restore_unit, snapshot_grade, require_snapshot_choice, snapshot_choice_required
 from .listening import listening_unit_has_audio_sql
+from .attempt_stats import aggregate
 
 
 class IncompleteSubmissionError(ValueError):
@@ -188,8 +190,8 @@ def create_session(
 
     cursor = connection.execute(
         """
-        INSERT INTO practice_sessions (mode, paper_id, unit_ids, shuffle_options)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO practice_sessions (mode, paper_id, unit_ids, shuffle_options, candidate_policy_version)
+        VALUES (?, ?, ?, ?, 1)
         """,
         (
             request.mode,
@@ -221,6 +223,8 @@ def create_session(
         for row in rows:
             only_by_unit.setdefault(row["unit_id"], set()).add(row["id"])
 
+    from .practice_snapshots import current_content_revisions
+    connection.execute('UPDATE practice_sessions SET content_revisions=? WHERE id=?',(current_content_revisions(connection,unit_ids),session_id))
     units = []
     for unit_id in unit_ids:
         unit = serialize_unit(
@@ -289,6 +293,7 @@ def get_session(connection: sqlite3.Connection, session_id: int) -> dict[str, An
     if session is None:
         raise LookupError("练习记录不存在")
 
+    snapshot = read_snapshot(session["content_snapshot"])
     unit_ids = parse_json(session["unit_ids"], [])
     answers = connection.execute(
         """
@@ -323,11 +328,12 @@ def get_session(connection: sqlite3.Connection, session_id: int) -> dict[str, An
             if question:
                 only_by_unit.setdefault(question["unit_id"], set()).add(row["question_id"])
     for unit_id in unit_ids:
-        unit = serialize_unit(
+        unit = restore_unit(connection, snapshot, unit_id) or serialize_unit(
             connection,
             unit_id,
             shuffle_options=bool(session["shuffle_options"]),
             answer_orders=order_map,
+            candidate_policy_version=int(session["candidate_policy_version"] or 0),
             # Correct answers remain private to scoring and AI analysis. The
             # practice response exposes only the user's answer and correctness.
             include_answers=False,
@@ -352,7 +358,7 @@ def get_session(connection: sqlite3.Connection, session_id: int) -> dict[str, An
             correct_count = sum(row["is_correct"] == 1 for row in unit_answer_rows)
             wrong_count = sum(row["is_correct"] == 0 for row in unit_answer_rows)
             computed_score = sum(
-                row["question_score"]
+                next(q["score"] for q in unit["questions"] if q["id"] == row["question_id"])
                 for row in unit_answer_rows
                 if row["is_correct"] == 1
             )
@@ -400,6 +406,8 @@ def get_session(connection: sqlite3.Connection, session_id: int) -> dict[str, An
         "paper_id": session["paper_id"],
         "status": session["status"],
         "shuffle_options": bool(session["shuffle_options"]),
+        "content_revision": snapshot.get("revision"),
+        "content_choice_required": snapshot_choice_required(session),
         "started_at": session["started_at"],
         "submitted_at": session["submitted_at"],
         "score": session["score"],
@@ -419,10 +427,11 @@ def save_answer(
     option_order: list[str],
 ) -> None:
     session = connection.execute(
-        "SELECT status FROM practice_sessions WHERE id = ?", (session_id,)
+        "SELECT * FROM practice_sessions WHERE id = ?", (session_id,)
     ).fetchone()
     if session is None:
         raise LookupError("练习记录不存在")
+    require_snapshot_choice(session)
     if session["status"] != "active":
         raise ValueError("已经提交的练习不能修改")
     unit = connection.execute(
@@ -480,57 +489,6 @@ def save_answer(
     connection.commit()
 
 
-def _update_wrong_stat(
-    connection: sqlite3.Connection, question_id: int, is_correct: bool
-) -> None:
-    row = connection.execute(
-        "SELECT * FROM wrong_stats WHERE question_id = ?", (question_id,)
-    ).fetchone()
-    now = datetime.now().isoformat(timespec="seconds")
-    if row is None:
-        recent = [is_correct]
-        connection.execute(
-            """
-            INSERT INTO wrong_stats
-                (question_id, attempt_count, wrong_count, recent_results,
-                 consecutive_correct, last_wrong_at, last_attempt_at)
-            VALUES (?, 1, ?, ?, ?, ?, ?)
-            """,
-            (
-                question_id,
-                0 if is_correct else 1,
-                json.dumps(recent),
-                1 if is_correct else 0,
-                None if is_correct else now,
-                now,
-            ),
-        )
-        return
-
-    recent = parse_json(row["recent_results"], [])
-    recent = (recent + [is_correct])[-10:]
-    connection.execute(
-        """
-        UPDATE wrong_stats
-        SET attempt_count = attempt_count + 1,
-            wrong_count = wrong_count + ?,
-            recent_results = ?,
-            consecutive_correct = ?,
-            last_wrong_at = ?,
-            last_attempt_at = ?
-        WHERE question_id = ?
-        """,
-        (
-            0 if is_correct else 1,
-            json.dumps(recent),
-            row["consecutive_correct"] + 1 if is_correct else 0,
-            row["last_wrong_at"] if is_correct else now,
-            now,
-            question_id,
-        ),
-    )
-
-
 def _grade_answer_rows(
     connection: sqlite3.Connection,
     rows: list[sqlite3.Row],
@@ -538,19 +496,43 @@ def _grade_answer_rows(
     score = 0.0
     max_score = 0.0
     for row in rows:
-        max_score += row["score"]
+        original_answer, original_score = snapshot_grade(connection, row)
+        max_score += original_score
         normalized_user = "".join(sorted(row["user_answer"].strip().upper()))
-        normalized_answer = "".join(sorted(row["answer"].strip().upper()))
+        normalized_answer = "".join(sorted(original_answer.strip().upper()))
         is_correct = bool(normalized_user) and normalized_user == normalized_answer
         if is_correct:
-            score += row["score"]
+            score += original_score
         already_graded = row["is_correct"] is not None
         connection.execute(
             "UPDATE practice_answers SET is_correct = ? WHERE id = ?",
             (int(is_correct), row["id"]),
         )
-        if not already_graded:
-            _update_wrong_stat(connection, row["question_id"], is_correct)
+        snapshot_session = connection.execute('SELECT content_snapshot FROM practice_sessions WHERE id=?', (row['session_id'],)).fetchone()
+        historical_content = bool(read_snapshot(snapshot_session['content_snapshot']).get('revision'))
+        if not already_graded and not historical_content:
+            session = connection.execute(
+                "SELECT sync_id FROM practice_sessions WHERE id=?", (row["session_id"],)
+            ).fetchone()
+            if not session or not session["sync_id"]:
+                connection.execute(
+                    "UPDATE practice_sessions SET sync_id=lower(hex(randomblob(16))) WHERE id=?",
+                    (row["session_id"],),
+                )
+                session = connection.execute(
+                    "SELECT sync_id FROM practice_sessions WHERE id=?", (row["session_id"],)
+                ).fetchone()
+            current = connection.execute(
+                "SELECT * FROM wrong_stats WHERE question_id=?", (row["question_id"],)
+            ).fetchone()
+            values = aggregate(dict(current) if current else {}, attempt=(
+                session["sync_id"], datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace('+00:00', 'Z'), is_correct))
+            connection.execute(
+                "INSERT OR IGNORE INTO wrong_stats(question_id) VALUES(?)", (row["question_id"],))
+            connection.execute(
+                f"UPDATE wrong_stats SET {', '.join(name + '=?' for name in values)} WHERE question_id=?",
+                [*values.values(), row["question_id"]],
+            )
     return score, max_score
 
 
@@ -564,6 +546,7 @@ def submit_unit(
     ).fetchone()
     if session is None:
         raise LookupError("练习记录不存在")
+    require_snapshot_choice(session)
     if session["status"] != "active":
         raise ValueError("整份练习已经提交")
     if session["mode"] != "paper":
@@ -623,8 +606,11 @@ def submit_session(
     ).fetchone()
     if session is None:
         raise LookupError("练习记录不存在")
+    require_snapshot_choice(session)
     if session["status"] == "submitted":
         return get_session(connection, session_id)
+    if session["status"] != "active":
+        raise ValueError("练习已结束，请重新打开练习")
 
     rows = connection.execute(
         """

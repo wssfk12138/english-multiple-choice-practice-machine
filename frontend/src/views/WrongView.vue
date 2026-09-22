@@ -1,21 +1,25 @@
 <script setup lang="ts">
+import { confirmDesktop } from '../services/desktopConfirm'
 import {
   BookOpenText,
   Brain,
+  Trash2,
   ChevronDown,
   FileText,
   Play,
   Sparkles,
 } from 'lucide-vue-next'
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { get, post } from '../api'
+import { wrongListReturn } from '../services/wrongListReturn'
 
 type WrongRow = {
   question_id: number
   number: number
   unit_id: number
   unit_title: string
+  content_revision?: string
   unit_type: string
   year: number
   wrong_count: number
@@ -25,6 +29,7 @@ type WrongRow = {
 type UnitGroup = {
   unitId: number
   title: string
+  contentRevision?: string
   unitType: string
   questionIds: number[]
   questionCount: number
@@ -69,7 +74,7 @@ type AnalysisStatus = {
 
 const router = useRouter()
 const rows = ref<WrongRow[]>([])
-const frequentOnly = ref(false)
+const frequentOnly = ref(useRoute().query.view === 'frequent')
 const error = ref('')
 const analysis = ref('')
 const analysisTitle = ref('')
@@ -97,6 +102,7 @@ const grouped = computed<YearGroup[]>(() => {
         unitType: row.unit_type,
         questionIds: [],
         questionCount: 0,
+        contentRevision: row.content_revision,
         wrongAttempts: 0,
         frequentCount: 0,
       })
@@ -157,7 +163,13 @@ async function load() {
   }
 }
 
-onMounted(load)
+onMounted(async () => {
+  if (wrongListReturn.pending) {
+    frequentOnly.value=wrongListReturn.view==='frequent'
+    await load(); openYears.value=new Set(wrongListReturn.years)
+    await nextTick(); window.scrollTo(0,wrongListReturn.scroll); wrongListReturn.pending=false
+  } else await load()
+})
 
 function toggleYear(year: number) {
   const next = new Set(openYears.value)
@@ -165,6 +177,10 @@ function toggleYear(year: number) {
   openYears.value = next
 }
 
+async function archiveUnit(unit:UnitGroup) {
+  if (!await confirmDesktop('删除“'+unit.title+'”的错题及分析记录？可在回收站恢复，保留七天。')) return
+  try { await post('/wrong/archive-delete',{unit_ids:[unit.unitId]}); await load() } catch(cause) {error.value=String(cause)}
+}
 async function retryScope(
   key: string,
   unitIds: number[],
@@ -195,6 +211,10 @@ async function analyzeScope(
   title: string,
   unitIds: number[] = [],
 ) {
+  if (key.startsWith('unit-') && unitIds.length === 1) {
+    Object.assign(wrongListReturn,{pending:true,view:frequentOnly.value?'frequent':'current',years:[...openYears.value],units:[],scroll:window.scrollY})
+    router.push('/wrong/'+unitIds[0]+'/analysis'); return
+  }
   const scopeStatuses = unitIds
     .map(unitId => analysisStatuses.value[unitId])
     .filter(Boolean)
@@ -402,7 +422,7 @@ function analysisLabel(unitIds: number[]): string {
             <span class="wrong-level-icon unit"><FileText :size="18" /></span>
             <span class="wrong-level-copy">
               <span class="wrong-level-kicker">篇目</span>
-              <strong>{{ unit.title }}</strong>
+              <strong>{{ unit.title }}</strong><small v-if="unit.contentRevision">题面已修正，历史作答与统计保留</small>
             </span>
             <span class="wrong-level-stats">
               <span><b>{{ unit.questionCount }}</b> 道错题</span>
@@ -426,7 +446,7 @@ function analysisLabel(unitIds: number[]): string {
               >
                 <Play :size="15" />
                 {{ startingKey === `unit-${unit.unitId}` ? '正在启动…' : '开始重做' }}
-              </button>
+              </button><button class="button secondary compact" :aria-label="'删除 '+unit.title" @click="archiveUnit(unit)"><Trash2 :size="15" /></button>
             </div>
           </article>
         </div>

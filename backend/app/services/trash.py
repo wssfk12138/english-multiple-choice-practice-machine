@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .wrong_analysis_history import archive_reports, purge_orphan_reports
+
 import json
 import sqlite3
 from pathlib import Path
@@ -102,6 +104,29 @@ def trash_import_job(connection: sqlite3.Connection, job_id: int) -> dict[str, A
         metadata={"previous_status": row["status"]},
     )
     return {"batch_id": batch_id, "purge_after": purge_after}
+
+
+def trash_wrong_units(connection, unit_ids):
+    profile_id = get_active_profile_id(connection)
+    batch_id, purge_after = new_trash_batch()
+    archived = 0
+    for unit_id in sorted(set(unit_ids)):
+        unit = connection.execute('SELECT u.title FROM units u JOIN papers p ON p.id=u.paper_id WHERE u.id=? AND p.profile_id=? AND p.deleted_at IS NULL', (unit_id, profile_id)).fetchone()
+        if unit is None:
+            continue
+        stats = [dict(row) for row in connection.execute('SELECT w.* FROM wrong_stats w JOIN questions q ON q.id=w.question_id WHERE q.unit_id=?', (unit_id,))]
+        state = connection.execute('SELECT * FROM wrong_analysis_states WHERE unit_id=?', (unit_id,)).fetchone()
+        if not stats and state is None:
+            continue
+        _trash_row(connection, batch_id=batch_id, resource_type='wrong_archive', resource_id=unit_id, resource_name=unit['title'], profile_id=profile_id, purge_after=purge_after, metadata={'stats':stats, 'state':dict(state) if state else None})
+        trash_id = connection.execute('SELECT last_insert_rowid()').fetchone()[0]
+        archive_reports(connection, unit_id, trash_id)
+        connection.execute('DELETE FROM wrong_stats WHERE question_id IN (SELECT id FROM questions WHERE unit_id=?)', (unit_id,))
+        connection.execute('DELETE FROM wrong_analysis_states WHERE unit_id=?', (unit_id,))
+        archived += 1
+    if not archived:
+        raise ValueError('所选篇目不存在或已经删除')
+    return {'archived':archived, 'batch_id':batch_id, 'purge_after':purge_after}
 
 
 def trash_profile(connection: sqlite3.Connection, profile_id: int) -> dict[str, Any]:
@@ -370,6 +395,18 @@ def _restore_one(
             """,
             (profile_id, previous_status, resource_id),
         )
+    elif resource_type == 'wrong_archive':
+        if not connection.execute('SELECT 1 FROM units WHERE id=?', (resource_id,)).fetchone():
+            raise ValueError('原篇目已永久删除，无法恢复错题')
+        metadata = json.loads(row['metadata'] or '{}')
+        for stat in metadata.get('stats', []):
+            columns = ('question_id','attempt_count','wrong_count','recent_results','consecutive_correct','manually_frequent','attempt_ledger','last_wrong_at','last_attempt_at')
+            # New attempts since deletion win; never overwrite newer practice.
+            connection.execute(f"INSERT OR IGNORE INTO wrong_stats ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})", tuple(stat.get(column) for column in columns))
+        state = metadata.get('state')
+        if state:
+            connection.execute('INSERT OR IGNORE INTO wrong_analysis_states(unit_id,report_id,analyzed_session_id,analyzed_at) VALUES(?,?,?,?)', (state['unit_id'],state['report_id'],state['analyzed_session_id'],state['analyzed_at']))
+        connection.execute('DELETE FROM wrong_analysis_hidden WHERE trash_id=?', (row['id'],))
     else:
         raise ValueError("不支持的回收站资源类型")
 
@@ -452,7 +489,9 @@ def purge_trash(
     for item in group:
         resource_type = item["resource_type"]
         resource_id = int(item["resource_id"])
-        if resource_type == "paper":
+        if resource_type == "wrong_archive":
+            connection.execute('UPDATE wrong_analysis_hidden SET trash_id=NULL WHERE trash_id=?', (item['id'],))
+        elif resource_type == "paper":
             connection.execute("DELETE FROM papers WHERE id = ?", (resource_id,))
         elif resource_type == "import_job":
             _purge_job_files(item)
@@ -463,6 +502,7 @@ def purge_trash(
         "DELETE FROM trash_entries WHERE deletion_batch_id = ?",
         (row["deletion_batch_id"],),
     )
+    purge_orphan_reports(connection)
     return {"purged": True, "batch_id": row["deletion_batch_id"], "count": len(group)}
 
 

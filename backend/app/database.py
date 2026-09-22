@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from collections.abc import Generator
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
@@ -143,6 +144,7 @@ CREATE TABLE IF NOT EXISTS wrong_stats (
     recent_results TEXT NOT NULL DEFAULT '[]',
     consecutive_correct INTEGER NOT NULL DEFAULT 0,
     manually_frequent INTEGER NOT NULL DEFAULT 0,
+    attempt_ledger TEXT,
     last_wrong_at TEXT,
     last_attempt_at TEXT,
     FOREIGN KEY (question_id) REFERENCES questions(id) ON DELETE CASCADE
@@ -160,6 +162,9 @@ CREATE TABLE IF NOT EXISTS vocabulary_entries (
     synonyms TEXT NOT NULL DEFAULT '[]',
     antonyms TEXT NOT NULL DEFAULT '[]',
     similar_forms TEXT NOT NULL DEFAULT '[]',
+    morphology TEXT NOT NULL DEFAULT '{}',
+    generated_example TEXT NOT NULL DEFAULT '{}',
+    contextual_occurrence_key TEXT NOT NULL DEFAULT '',
     memory_hint TEXT NOT NULL DEFAULT '',
     note TEXT NOT NULL DEFAULT '',
     translation_status TEXT NOT NULL DEFAULT 'pending',
@@ -170,15 +175,26 @@ CREATE TABLE IF NOT EXISTS vocabulary_entries (
     user_edited INTEGER NOT NULL DEFAULT 0,
     next_review_at TEXT,
     last_reviewed_at TEXT,
+    review_stage INTEGER NOT NULL DEFAULT 0,
+    last_result TEXT NOT NULL DEFAULT '',
+    lapse_count INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS vocabulary_enrichment_jobs (
+  entry_id INTEGER PRIMARY KEY REFERENCES vocabulary_entries(id) ON DELETE CASCADE,
+  state TEXT NOT NULL DEFAULT 'queued',
+  error TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS vocabulary_occurrences (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     entry_id INTEGER NOT NULL,
     surface_form TEXT NOT NULL,
+    source_kind TEXT NOT NULL DEFAULT 'unknown',
+    selection_start INTEGER NOT NULL DEFAULT -1,
     context_sentence TEXT NOT NULL DEFAULT '',
     context_before TEXT NOT NULL DEFAULT '',
     context_after TEXT NOT NULL DEFAULT '',
@@ -197,6 +213,7 @@ CREATE TABLE IF NOT EXISTS vocabulary_reviews (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     entry_id INTEGER NOT NULL,
     rating TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'scheduled',
     reviewed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     next_review_at TEXT,
     FOREIGN KEY (entry_id) REFERENCES vocabulary_entries(id) ON DELETE CASCADE
@@ -371,6 +388,13 @@ CREATE TABLE IF NOT EXISTS wrong_analysis_reports (
     report TEXT NOT NULL,
     model_name TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS wrong_analysis_hidden (
+    report_id INTEGER NOT NULL REFERENCES wrong_analysis_reports(id) ON DELETE CASCADE,
+    unit_id INTEGER NOT NULL REFERENCES units(id) ON DELETE CASCADE,
+    trash_id INTEGER,
+    PRIMARY KEY(report_id,unit_id)
 );
 
 CREATE TABLE IF NOT EXISTS wrong_analysis_states (
@@ -596,6 +620,12 @@ def _migrate_question_label_auto_lock(connection: sqlite3.Connection) -> None:
 
 
 def _run_migrations(connection: sqlite3.Connection) -> None:
+    _ensure_column(connection, "vocabulary_entries", "review_stage", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(connection, "vocabulary_entries", "last_result", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(connection, "vocabulary_entries", "lapse_count", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(connection, "vocabulary_reviews", "mode", "TEXT NOT NULL DEFAULT 'scheduled'")
+    _ensure_column(connection, 'wrong_stats', 'attempt_ledger', 'TEXT')
+    _ensure_column(connection, 'practice_sessions', 'sync_id', 'TEXT')
     connection.execute(
         """
         INSERT INTO question_bank_profiles (name, description, is_default)
@@ -630,9 +660,17 @@ def _run_migrations(connection: sqlite3.Connection) -> None:
     _ensure_column(connection, "import_jobs", "profile_id", f"INTEGER NOT NULL DEFAULT {int(default_profile_id)}")
     _ensure_column(connection, "import_jobs", "answer_stored_path", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(connection, "import_jobs", "deleted_at", "TEXT")
+    _ensure_column(connection, "vocabulary_occurrences", "source_kind", "TEXT NOT NULL DEFAULT 'unknown'")
+    _ensure_column(connection, "vocabulary_occurrences", "selection_start", "INTEGER NOT NULL DEFAULT -1")
     _ensure_column(connection, "vocabulary_entries", "synonyms", "TEXT NOT NULL DEFAULT '[]'")
     _ensure_column(connection, "vocabulary_entries", "antonyms", "TEXT NOT NULL DEFAULT '[]'")
     _ensure_column(connection, "vocabulary_entries", "similar_forms", "TEXT NOT NULL DEFAULT '[]'")
+    _ensure_column(connection, "practice_sessions", "candidate_policy_version", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(connection, "practice_sessions", "snapshot_accepted_revision", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(connection, "practice_sessions", "content_snapshot", "TEXT NOT NULL DEFAULT '{}'")
+    _ensure_column(connection, "practice_sessions", "content_revisions", "TEXT NOT NULL DEFAULT '{}'")
+    for field, fallback in (("morphology", "{}"), ("generated_example", "{}"), ("contextual_occurrence_key", "")):
+        _ensure_column(connection, "vocabulary_entries", field, f"TEXT NOT NULL DEFAULT '{fallback}'")
     _ensure_column(connection, "papers", "exam_type", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(connection, "papers", "exam_month", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(connection, "papers", "set_number", "INTEGER NOT NULL DEFAULT 1")
@@ -770,7 +808,7 @@ def _run_migrations(connection: sqlite3.Connection) -> None:
 
 
 def initialize_database() -> None:
-    with connect() as connection:
+    with closing(connect()) as connection, connection:
         connection.executescript(SCHEMA)
         _run_migrations(connection)
 

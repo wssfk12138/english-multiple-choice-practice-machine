@@ -6,9 +6,26 @@ import sqlite3
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..database import get_active_profile_id, get_db
+from ..services.trash import trash_wrong_units
+from pydantic import BaseModel, Field
 
 
 router = APIRouter(prefix="/wrong", tags=["wrong"])
+
+
+class WrongArchiveRequest(BaseModel):
+    unit_ids: list[int] = Field(min_length=1, max_length=500)
+
+
+@router.post('/archive-delete')
+def archive_wrong(request: WrongArchiveRequest, connection: sqlite3.Connection = Depends(get_db)):
+    try:
+        result = trash_wrong_units(connection, request.unit_ids)
+        connection.commit()
+        return result
+    except ValueError as error:
+        connection.rollback()
+        raise HTTPException(400, str(error)) from error
 
 
 @router.get("")
@@ -18,7 +35,8 @@ def list_wrong(connection: sqlite3.Connection = Depends(get_db)) -> list[dict]:
         """
         SELECT questions.id AS question_id, questions.number, questions.stem,
                units.id AS unit_id, units.title AS unit_title, units.unit_type,
-               papers.year, wrong_stats.*
+               papers.year, wrong_stats.*,
+               json_extract(units.shared_data, '$.content_revision') AS content_revision
         FROM wrong_stats
         JOIN questions ON questions.id = wrong_stats.question_id
         JOIN units ON units.id = questions.unit_id

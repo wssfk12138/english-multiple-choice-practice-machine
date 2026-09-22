@@ -1,0 +1,13 @@
+.ai-settings-page { display:grid; grid-template-columns:minmax(250px, .75fr) minmax(0, 1.75fr); gap:20px; align-items:start; }
+.ai-settings-page > .page-head { grid-column:1 / -1; grid-row:1; }
+.ai-settings-page > .desktop-learning-settings { grid-column:1; grid-row:2 / span 6; display:grid; gap:20px; min-width:0; }
+.ai-settings-page > :not(.page-head):not(.desktop-learning-settings) { grid-column:2; min-width:0; }
+.ai-settings-page .api-profile-copy { min-width:0; overflow-wrap:anywhere; }
+.ai-settings-page .api-profile-copy > small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%; }
+.ai-settings-page .api-profile-body .grid-2 { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.ai-settings-page .api-profile-body .field,.ai-settings-page .named-keys { min-width:0; }
+.ai-settings-page .api-profile-body small { overflow-wrap:anywhere; }
+.ai-settings-page .api-actions { flex-wrap:wrap; }
+.ai-settings-page .desktop-learning-settings > h2 { grid-column:1 / -1; }
+@media(max-width:1100px) { .ai-settings-page { grid-template-columns:1fr; } .ai-settings-page > .desktop-learning-settings { grid-column:1; grid-row:auto; grid-template-columns:repeat(2,minmax(0,1fr)); } .ai-settings-page > :not(.page-head):not(.desktop-learning-settings) { grid-column:1; } }
+@media(max-width:700px) { .ai-settings-page > .desktop-learning-settings,.ai-settings-page .api-profile-body .grid-2 { grid-template-columns:1fr; } }

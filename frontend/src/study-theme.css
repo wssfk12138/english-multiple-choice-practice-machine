@@ -1,0 +1,79 @@
+/* Approved shared palette; geometry and release UI remain platform-owned. */
+html:root .study-hero {
+  background-image: linear-gradient(90deg, rgba(250,252,255,.98), rgba(250,252,255,.86) 48%, rgba(250,252,255,.15)),
+    url("/assets/backgrounds/study-coast-morning-v1.webp");
+}
+html:root.dark .study-hero {
+  background-image: linear-gradient(90deg, rgba(37,40,47,.98), rgba(37,40,47,.86) 48%, rgba(37,40,47,.15)),
+    url("/assets/backgrounds/study-coast-dusk-v1.webp");
+}
+html:root {
+  color-scheme: light;
+  --bg: #edf2f6;
+  --surface: rgba(250, 252, 255, .94);
+  --surface-solid: #fafcff;
+  --ink: #29313c;
+  --muted: #616d7d;
+  --line: rgba(91, 110, 133, .18);
+  --line-strong: rgba(75, 95, 121, .28);
+  --primary: #416a9a;
+  --primary-hover: #315580;
+  --primary-soft: #dfeaf6;
+  --primary-faint: #edf3fa;
+  --lavender: #e9e4f5;
+  --apricot: #f7dfc6;
+  --blue: #dcecf4;
+  --danger: #b54f46;
+  --danger-soft: #fae3dd;
+  --success: #34785a;
+  --focus: rgba(65, 106, 154, .3);
+  --shadow-sm: 0 4px 14px rgba(57, 66, 58, .075);
+  --shadow: 0 16px 42px rgba(57, 66, 58, .13);
+  background-color: var(--bg);
+}
+
+html:root.dark {
+  color-scheme: dark;
+  --bg: #191b20;
+  --surface: rgba(37, 40, 47, .94);
+  --surface-solid: #25282f;
+  --ink: #f0f1f5;
+  --muted: #b7bdc8;
+  --line: rgba(211, 216, 235, .15);
+  --line-strong: rgba(211, 216, 235, .25);
+  --primary: #a5c5ed;
+  --primary-hover: #c0d7f4;
+  --primary-soft: #334154;
+  --primary-faint: #2b3340;
+  --lavender: #38324f;
+  --apricot: #49382f;
+  --blue: #263c58;
+  --danger: #f0a097;
+  --danger-soft: #4c3038;
+  --success: #91d5ae;
+  --focus: rgba(165, 197, 237, .34);
+  --shadow-sm: 0 5px 17px rgba(0, 0, 0, .2);
+  --shadow: 0 18px 48px rgba(0, 0, 0, .3);
+}
+
+html:root body {
+  background-color: var(--bg);
+  background-image:
+    linear-gradient(rgba(237, 242, 246, .22), rgba(237, 242, 246, .22)),
+    url("/assets/backgrounds/study-coast-morning-v1.webp");
+  background-repeat: no-repeat;
+  background-position: center bottom;
+  background-size: cover;
+  background-attachment: fixed;
+}
+
+html:root.dark .button:not(.secondary):not(.ghost):not(.danger) {
+  color: #191b20;
+}
+
+html:root.dark body {
+  background-color: var(--bg);
+  background-image:
+    linear-gradient(rgba(25, 27, 32, .32), rgba(25, 27, 32, .32)),
+    url("/assets/backgrounds/study-coast-dusk-v1.webp");
+}

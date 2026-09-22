@@ -17,8 +17,8 @@ v2 additions over the original full-snapshot design:
 from __future__ import annotations
 
 import json
+import hashlib
 import secrets
-import socket
 import sqlite3
 import threading
 import time
@@ -32,7 +32,35 @@ TOKEN_TTL_SECONDS = 60 * 15
 
 _tokens: dict[str, float] = {}
 _token_profiles: dict[str, list[str]] = {}
-_tokens_lock = threading.Lock()
+_token_devices: dict[str, str] = {}
+_token_transports: dict[str, str] = {}
+_token_categories: dict[str, list[str] | None] = {}
+_pairing_invitation: tuple[str, float, str] | None = None
+PAIRING_TTL_SECONDS = 180
+
+
+def create_pairing_invitation(connection: sqlite3.Connection, replace_device_id: str = "") -> dict:
+    global _pairing_invitation
+    with _tokens_lock:
+        if not sync_enabled(connection):
+            raise ValueError("LAN sync disabled")
+        _ensure_paired_devices_table(connection)
+        if replace_device_id and not connection.execute(
+                "SELECT 1 FROM sync_paired_devices WHERE device_id = ?", (replace_device_id,)).fetchone():
+            raise ValueError("Replacement device no longer exists")
+        code = secrets.token_urlsafe(32)
+        _pairing_invitation = (_pairing_hash(code), time.monotonic() + PAIRING_TTL_SECONDS, replace_device_id)
+        return {"pairing_code": code, "expires_at": int(time.time()) + PAIRING_TTL_SECONDS}
+
+
+def clear_pairing_invitation() -> None:
+    global _pairing_invitation
+    with _tokens_lock:
+        _pairing_invitation = None
+
+def _pairing_hash(value: str) -> str:
+    return hashlib.sha256(value.encode('utf-8')).hexdigest()
+_tokens_lock = threading.RLock()
 
 
 def _setting(connection: sqlite3.Connection, key: str) -> str:
@@ -71,28 +99,101 @@ def issue_token(
     profile_names: Iterable[str],
     device_id: str = "",
 ) -> str | None:
-    """Issue a short-lived token after validating the current passcode.
+    result = authenticate_device(connection, passcode, "", profile_names, device_id)
+    return result[0] if result else None
 
-    ``device_id`` is an inventory identifier used for revocation, not an
-    authentication secret.  Every handshake must therefore present the current
-    passcode, including devices that paired before a passcode rotation.
+
+def authenticate_device(
+    connection: sqlite3.Connection,
+    passcode: str,
+    pairing_token: str,
+    profile_names: Iterable[str],
+    device_id: str = "",
+    *, transport: str = "legacy", pairing_code: str = "",
+) -> tuple[str, str | None] | None:
+    # Pairing and revocation must not interleave before the session is registered.
+    with _tokens_lock:
+        return _authenticate_device(connection, passcode, pairing_token, profile_names, device_id,
+                                    transport=transport, pairing_code=pairing_code)
+
+
+def _authenticate_device(
+    connection: sqlite3.Connection,
+    passcode: str,
+    pairing_token: str,
+    profile_names: Iterable[str],
+    device_id: str = "",
+    *, transport: str = "legacy", pairing_code: str = "",
+) -> tuple[str, str | None] | None:
+    """Authenticate a device and issue a short-lived sync session.
+
+    A passcode is required only for first pairing (or after revocation).  A
+    previously issued per-device pairing token survives passcode rotation and
+    is stored only as a hash on the host.
     """
-    if not sync_enabled(connection):
+    global _pairing_invitation
+    if not sync_enabled(connection) or transport not in ("legacy", "tls-v2"):
         return None
+    _ensure_paired_devices_table(connection)
     current_passcode = get_passcode(connection)
-    if not passcode or not current_passcode:
-        return None
-    if not secrets.compare_digest(str(passcode), current_passcode):
-        return None
     device_id = str(device_id or "").strip()
+    pairing_token = str(pairing_token or "").strip()
+    row = connection.execute(
+        "SELECT pairing_token_hash, transport FROM sync_paired_devices WHERE device_id = ?",
+        (device_id,),
+    ).fetchone()
+    if transport == "legacy" and row and row["transport"] == "tls-v2":
+        return None
+    if transport == "tls-v2" and not device_id:
+        return None
+    authenticated_by_pairing = False
+    if pairing_token and device_id:
+        authenticated_by_pairing = bool(row and row["transport"] == transport and row["pairing_token_hash"] and secrets.compare_digest(
+            str(row["pairing_token_hash"]), _pairing_hash(pairing_token)
+        ))
+    if not authenticated_by_pairing:
+        if transport == "tls-v2":
+            if (not pairing_code or not _pairing_invitation
+                    or time.monotonic() >= _pairing_invitation[1]
+                    or not secrets.compare_digest(_pairing_hash(pairing_code), _pairing_invitation[0])):
+                return None
+        elif not passcode or not current_passcode or not secrets.compare_digest(str(passcode), current_passcode):
+            return None
+    replacement = (_pairing_invitation[2] if transport == "tls-v2"
+                   and not authenticated_by_pairing and _pairing_invitation else "")
+    if replacement and (replacement == device_id or row or not connection.execute(
+            "SELECT 1 FROM sync_paired_devices WHERE device_id = ?", (replacement,)).fetchone()):
+        return None
+    issued_pairing_token: str | None = None
     if device_id:
-        _record_pairing(connection, device_id)
-        connection.commit()
+        try:
+            if authenticated_by_pairing:
+                _record_pairing(connection, device_id, None)
+            else:
+                issued_pairing_token = secrets.token_urlsafe(32)
+                _record_pairing(connection, device_id, issued_pairing_token)
+                connection.execute("UPDATE sync_paired_devices SET transport = ? WHERE device_id = ?",
+                                   (transport, device_id))
+            if replacement:
+                connection.execute("DELETE FROM sync_paired_devices WHERE device_id = ?", (replacement,))
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        if replacement:
+            _revoke_device_sessions(replacement)
+        if transport == "tls-v2" and not authenticated_by_pairing:
+            _pairing_invitation = None
+        if issued_pairing_token:
+            _revoke_device_sessions(device_id)
     token = secrets.token_urlsafe(24)
     with _tokens_lock:
         _tokens[token] = time.time() + TOKEN_TTL_SECONDS
         _token_profiles[token] = [str(name) for name in profile_names if str(name).strip()]
-    return token
+        _token_devices[token] = device_id
+        _token_transports[token] = transport
+        _token_categories[token] = None
+    return token, issued_pairing_token
 
 
 def _ensure_paired_devices_table(connection: sqlite3.Connection) -> None:
@@ -101,10 +202,14 @@ def _ensure_paired_devices_table(connection: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS sync_paired_devices (
             device_id TEXT PRIMARY KEY,
             paired_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            pairing_token_hash TEXT
         )
         """
     )
+    from ..database import _ensure_column
+    _ensure_column(connection, "sync_paired_devices", "pairing_token_hash", "TEXT")
+    _ensure_column(connection, "sync_paired_devices", "transport", "TEXT NOT NULL DEFAULT 'legacy'")
     _ensure_sync_aliases_table(connection)
 
 
@@ -122,14 +227,15 @@ def _ensure_sync_aliases_table(connection: sqlite3.Connection) -> None:
     )
 
 
-def _record_pairing(connection: sqlite3.Connection, device_id: str) -> None:
+def _record_pairing(connection: sqlite3.Connection, device_id: str, pairing_token: str | None) -> None:
     _ensure_paired_devices_table(connection)
+    token_hash = _pairing_hash(pairing_token) if pairing_token else None
     connection.execute(
         """
-        INSERT INTO sync_paired_devices(device_id) VALUES (?)
-        ON CONFLICT(device_id) DO UPDATE SET last_seen_at = CURRENT_TIMESTAMP
+        INSERT INTO sync_paired_devices(device_id, pairing_token_hash) VALUES (?, ?)
+        ON CONFLICT(device_id) DO UPDATE SET last_seen_at = CURRENT_TIMESTAMP, pairing_token_hash = COALESCE(excluded.pairing_token_hash, sync_paired_devices.pairing_token_hash)
         """,
-        (device_id,),
+        (device_id, token_hash),
     )
 
 
@@ -143,6 +249,9 @@ def verify_token(token: str) -> bool:
         if time.time() > expires:
             _tokens.pop(token, None)
             _token_profiles.pop(token, None)
+            _token_devices.pop(token, None)
+            _token_transports.pop(token, None)
+            _token_categories.pop(token, None)
             return False
     return True
 
@@ -152,10 +261,47 @@ def token_profiles(token: str) -> list[str]:
         return list(_token_profiles.get(token, []))
 
 
+def session_profiles(token: str, transport: str | None = None) -> list[str] | None:
+    """Read authorization atomically; a revoked session is never an empty scope."""
+    with _tokens_lock:
+        if not verify_token(token) or (transport is not None and _token_transports.get(token) != transport):
+            return None
+        return list(_token_profiles[token])
+
+
 def revoke_token(token: str) -> None:
     with _tokens_lock:
         _tokens.pop(token, None)
         _token_profiles.pop(token, None)
+        _token_devices.pop(token, None)
+        _token_transports.pop(token, None)
+        _token_categories.pop(token, None)
+
+
+def _revoke_device_sessions(device_id: str) -> None:
+    for token, owner in list(_token_devices.items()):
+        if owner == device_id:
+            revoke_token(token)
+
+
+def paired_devices(connection: sqlite3.Connection, limit: int, offset: int) -> dict[str, Any]:
+    _ensure_paired_devices_table(connection)
+    total = connection.execute("SELECT COUNT(*) FROM sync_paired_devices").fetchone()[0]
+    items = connection.execute(
+        "SELECT device_id, paired_at, last_seen_at FROM sync_paired_devices "
+        "ORDER BY paired_at DESC, device_id LIMIT ? OFFSET ?", (limit, offset),
+    ).fetchall()
+    return {"items": [dict(item) for item in items], "total": total}
+
+
+def revoke_device(connection: sqlite3.Connection, device_id: str) -> int:
+    with _tokens_lock:
+        clear_pairing_invitation()
+        _ensure_paired_devices_table(connection)
+        cursor = connection.execute("DELETE FROM sync_paired_devices WHERE device_id = ?", (device_id,))
+        connection.commit()
+        _revoke_device_sessions(device_id)
+        return int(cursor.rowcount)
 
 
 def _ensure_sync_columns(connection: sqlite3.Connection) -> None:
@@ -215,6 +361,9 @@ def _ensure_sync_columns(connection: sqlite3.Connection) -> None:
             "WHERE updated_at IS NULL OR updated_at = ''"
         )
     _backfill_content_keys(connection)
+    from .sync_versions import ensure_versions
+    _ensure_column(connection, 'wrong_stats', 'attempt_ledger', 'TEXT')
+    ensure_versions(connection, [*SYNC_TABLES, 'sync_tombstones'])
     connection.commit()
 
 
@@ -546,12 +695,35 @@ def _resolve_id(
         ).fetchone()
         return int(row["id"]) if row else None
     if kind == "entry":
-        row = connection.execute(
-            "SELECT id FROM vocabulary_entries WHERE normalized_term = ? LIMIT 1",
-            (stable_key,),
-        ).fetchone()
+        row = _vocabulary_sync_row(connection, stable_key)
         return int(row["id"]) if row else None
     return None
+
+
+
+def _entry_surface(value: str) -> str:
+    return ' '.join(str(value or '').strip().replace('’', "'").split()).lower()
+
+
+def _vocabulary_sync_row(connection, key: str, term: str | None = None):
+    alias = connection.execute(
+        "SELECT canonical_sync_id FROM sync_id_aliases WHERE table_name='vocabulary_entries' AND alias_sync_id=?", (key,)
+    ).fetchone()
+    canonical = str(alias[0]) if alias else key
+    found = connection.execute('SELECT rowid AS _rowid, * FROM vocabulary_entries WHERE normalized_term=?', (canonical,)).fetchone()
+    surface = _entry_surface(term) if term is not None else (key[11:] if key.startswith('surface:v1:') else '')
+    if term is not None and (not surface or (key.startswith('surface:v1:') and key[11:] != surface)):
+        raise ValueError('单词同步身份与词形不一致，请升级全部设备后重试')
+    if found is not None and surface and _entry_surface(found['term']) != surface:
+        raise ValueError('单词同步身份对应不同词形，学习记录未被合并')
+    if found is None and surface:
+        matches = connection.execute(
+            "SELECT rowid AS _rowid, * FROM vocabulary_entries WHERE lower(replace(trim(term), '’', char(39)))=? LIMIT 2", (surface,)
+        ).fetchall()
+        if len(matches) > 1:
+            raise ValueError('存在多个相同词形的词条，请先解决单词身份冲突')
+        found = matches[0] if matches else None
+    return found
 
 
 def _stable_key(
@@ -674,7 +846,7 @@ def _serialize_row(
     payload: dict[str, Any] = {}
     columns = _table_columns(connection, table)
     for column in columns:
-        if column == spec.get("secret"):
+        if column == spec.get("secret") or column == "_sync_seq":
             continue
         value = row[column]
         if column in spec["refs"]:
@@ -704,6 +876,9 @@ def _serialize_row(
     elif key == "normalized_term":
         payload["normalized_term"] = row["normalized_term"]
     payload["profile_name"] = _row_profile(connection, table, row)
+    if table == 'wrong_stats' and not payload.get('attempt_ledger'):
+        from .attempt_stats import aggregate
+        payload.update(aggregate(payload))
     return payload
 
 
@@ -713,8 +888,10 @@ def snapshot(
     profile_names: Iterable[str],
     cursor: dict[str, dict[str, Any]] | None = None,
     tombstone_cursor: dict[str, Any] | None = None,
+    *, tombstone_tables: Iterable[str] | None = None,
 ) -> dict[str, Any]:
-    """Serialize changes after a stable (updated_at, rowid) watermark."""
+    """Serialize changes after a database-local mutation sequence."""
+    from .sync_versions import sequence
     _ensure_sync_columns(connection)
     profiles = set(str(name) for name in profile_names if str(name).strip())
     cursor = cursor or {}
@@ -733,26 +910,29 @@ def snapshot(
             rowid = max(0, int(watermark.get("rowid") or 0))
             rows = connection.execute(
                 f"SELECT rowid AS _sync_rowid, * FROM {table} "
-                "WHERE updated_at > ? OR (updated_at = ? AND rowid > ?) "
-                "ORDER BY updated_at, rowid",
-                (updated_at, updated_at, rowid),
+                "WHERE _sync_seq > ? ORDER BY _sync_seq",
+                (sequence(watermark),),
             ).fetchall()
         except sqlite3.OperationalError:
             continue
         serialized = []
         for row in rows:
+            if table == "practice_sessions" and row["updated_at"] == "0001-01-01T00:00:00Z":
+                continue
             payload = _serialize_row(connection, table, row)
             if visible(payload.get("profile_name") or ""):
                 serialized.append(payload)
                 next_cursor[table] = {
                     "updated_at": str(row["updated_at"] or ""),
                     "rowid": int(row["_sync_rowid"]),
+                    "seq": int(row["_sync_seq"]),
                 }
         result[table] = serialized
         if table not in next_cursor:
             next_cursor[table] = {
                 "updated_at": updated_at,
                 "rowid": rowid,
+                "seq": sequence(watermark),
             }
 
     tombstones = []
@@ -761,15 +941,16 @@ def snapshot(
         deleted_at = str(tombstone_cursor.get("deleted_at") or "")
         tombstone_rowid = max(0, int(tombstone_cursor.get("rowid") or 0))
         tomb_rows = connection.execute(
-            "SELECT rowid AS _sync_rowid, table_name, object_key, profile_name, deleted_at "
-            "FROM sync_tombstones WHERE deleted_at > ? OR (deleted_at = ? AND rowid > ?) "
-            "ORDER BY deleted_at, rowid",
-            (deleted_at, deleted_at, tombstone_rowid),
+            "SELECT rowid AS _sync_rowid, * "
+            "FROM sync_tombstones WHERE _sync_seq > ? ORDER BY _sync_seq",
+            (sequence(tombstone_cursor),),
         ).fetchall()
     except sqlite3.OperationalError:
         tomb_rows = []
     for row in tomb_rows:
-        if visible(str(row["profile_name"] or "")):
+        if row["table_name"] == "ai_profiles":
+            continue
+        if (tombstone_tables is None or row["table_name"] in tombstone_tables) and visible(str(row["profile_name"] or "")):
             tombstones.append(
                 {
                     "table_name": row["table_name"],
@@ -781,6 +962,7 @@ def snapshot(
             tombstone_cursor = {
                 "deleted_at": str(row["deleted_at"] or ""),
                 "rowid": int(row["_sync_rowid"]),
+                "seq": int(row["_sync_seq"]),
             }
     return {
         "changes": result,
@@ -795,12 +977,16 @@ def _apply_row(
     table: str,
     payload: dict[str, Any],
 ) -> bool:
+    if table == "ai_profiles":
+        return False
+    from .sync_versions import version
+    remote_version = version(payload)
     spec = SYNC_TABLES[table]
     columns = _table_columns(connection, table)
     update: dict[str, Any] = {}
     profile_name = str(payload.get("profile_name") or "")
     for column in columns:
-        if column == "id" or column == spec.get("secret"):
+        if column == "id" or column == spec.get("secret") or column.startswith("_sync_"):
             continue
         if column in spec["refs"]:
             kind = spec["refs"][column]
@@ -848,11 +1034,10 @@ def _apply_row(
         ).fetchone()
     elif key == "normalized_term":
         key_value = payload.get("normalized_term") or ""
-        update["normalized_term"] = key_value
-        existing = connection.execute(
-            "SELECT rowid AS _rowid, updated_at FROM vocabulary_entries WHERE normalized_term = ? LIMIT 1",
-            (key_value,),
-        ).fetchone()
+        existing = _vocabulary_sync_row(connection, str(key_value), str(payload.get('term') or ''))
+        canonical = str(existing['normalized_term']) if existing is not None else _canonical_object_key(connection, table, str(key_value))
+        _record_sync_alias(connection, table, str(key_value), canonical)
+        update["normalized_term"] = canonical
     elif key == "name":
         key_value = payload.get("name") or ""
         update["name"] = key_value
@@ -880,19 +1065,62 @@ def _apply_row(
         else:
             update["sync_id"] = remote_sync_id
 
+    if table == 'practice_sessions' and not (existing is not None and payload.get('_dependency') is True):
+        from .practice_snapshots import validate_incoming_session_content
+        validate_incoming_session_content(connection, update)
+    object_key = str(update.get("sync_id") or update.get("normalized_term") or payload.get(key) or "")
+    tombstone = connection.execute(
+        "SELECT deleted_at FROM sync_tombstones WHERE table_name=? AND object_key=? "
+        "AND (profile_name=? OR ? IN ('vocabulary_entries','vocabulary_reviews')) "
+        "ORDER BY deleted_at DESC LIMIT 1", (table, object_key, profile_name, table)
+    ).fetchone()
+    if tombstone and remote_ts and remote_ts <= str(tombstone["deleted_at"]):
+        return False
+
+    if table == 'wrong_stats':
+        from .attempt_stats import aggregate
+        if existing is not None and not update.get('attempt_ledger'):
+            current_ledger = connection.execute('SELECT attempt_ledger FROM wrong_stats WHERE rowid=?', (existing['_rowid'],)).fetchone()[0]
+            if current_ledger:
+                raise ValueError('Legacy peer cannot merge graded attempt statistics; upgrade all devices')
+        update.update(aggregate(update))
     if existing is None:
         placeholders = ", ".join("?" for _ in update)
         if not update:
             return False
-        connection.execute(
+        inserted = connection.execute(
             f"INSERT INTO {table} ({', '.join(update)}) VALUES ({placeholders})",
             list(update.values()),
         )
+        connection.execute(f"UPDATE {table} SET _sync_rev=?, _sync_origin=? WHERE rowid=?",
+                           (*remote_version, inserted.lastrowid))
         return True
 
-    local_ts = str(existing["updated_at"] or "")
-    if remote_ts and local_ts and remote_ts <= local_ts:
+    if table == "practice_sessions" and payload.get("_dependency") is True:
         return False
+    local_ts = str(existing["updated_at"] or "")
+    local_version = connection.execute(
+        f"SELECT _sync_rev, _sync_origin FROM {table} WHERE rowid=?", (existing["_rowid"],)
+    ).fetchone()
+    if table == 'wrong_stats':
+        current = dict(connection.execute('SELECT * FROM wrong_stats WHERE rowid=?', (existing['_rowid'],)).fetchone())
+        merged = aggregate(current, update)
+        if (remote_ts, *remote_version) <= (local_ts, *local_version):
+            update = {**merged, 'updated_at': local_ts}
+            remote_version = tuple(local_version)
+        else:
+            update.update(merged)
+        if all(current.get(key) == value for key, value in update.items()):
+            return False
+    elif remote_ts and local_ts and (remote_ts, *remote_version) <= (local_ts, *local_version):
+        return False
+    if table == 'practice_sessions':
+        from .practice_snapshots import read_snapshot, snapshots_equivalent
+        stored = connection.execute('SELECT content_snapshot FROM practice_sessions WHERE rowid=?', (existing['_rowid'],)).fetchone()[0]
+        local_snapshot = read_snapshot(stored)
+        remote_snapshot = read_snapshot(update.get('content_snapshot', '{}'))
+        if local_snapshot and not snapshots_equivalent(local_snapshot, remote_snapshot):
+            raise ValueError('旧练习内容快照不一致，请升级全部设备后同步；学习记录未被覆盖')
     set_clause = ", ".join(f"{column} = ?" for column in update)
     if not set_clause:
         return False
@@ -900,6 +1128,8 @@ def _apply_row(
         f"UPDATE {table} SET {set_clause} WHERE rowid = ?",
         [*update.values(), existing["_rowid"]],
     )
+    connection.execute(f"UPDATE {table} SET _sync_rev=?, _sync_origin=? WHERE rowid=?",
+                       (*remote_version, existing["_rowid"]))
     return True
 
 
@@ -908,17 +1138,19 @@ def _record_tombstone(
     table: str,
     object_key: str,
     profile_name: str = "",
+    deleted_at: str | None = None,
 ) -> None:
     if not object_key:
         return
     connection.execute(
         """
         INSERT INTO sync_tombstones(table_name, object_key, profile_name, deleted_at)
-        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        VALUES (?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))
         ON CONFLICT(table_name, object_key, profile_name)
-        DO UPDATE SET deleted_at = CURRENT_TIMESTAMP
+        DO UPDATE SET deleted_at = excluded.deleted_at
+        WHERE ? IS NULL OR excluded.deleted_at > sync_tombstones.deleted_at
         """,
-        (table, object_key, profile_name or ""),
+        (table, object_key, profile_name or "", deleted_at, deleted_at),
     )
 
 
@@ -955,7 +1187,11 @@ def _canonical_object_key(
     table: str,
     object_key: str,
 ) -> str:
-    if SYNC_TABLES[table]["key"] != "sync_id":
+    if table == "vocabulary_entries":
+        found = _vocabulary_sync_row(connection, object_key)
+        if found is not None:
+            return str(found["normalized_term"])
+    elif SYNC_TABLES[table]["key"] != "sync_id":
         return object_key
     alias = connection.execute(
         "SELECT canonical_sync_id FROM sync_id_aliases "
@@ -993,6 +1229,7 @@ def _vocabulary_delete_tombstones(
     connection: sqlite3.Connection,
     normalized_term: str,
     profile_name: str = "",
+    deleted_at: str | None = None,
 ) -> None:
     """Record tombstones for a vocabulary entry and its occurrences/reviews
     before the entry is hard-deleted (so the cascade delete also propagates)."""
@@ -1000,7 +1237,10 @@ def _vocabulary_delete_tombstones(
         "SELECT id FROM vocabulary_entries WHERE normalized_term = ? LIMIT 1",
         (normalized_term,),
     ).fetchone()
-    _record_tombstone(connection, "vocabulary_entries", normalized_term, profile_name)
+    _record_tombstone(connection, "vocabulary_entries", normalized_term, profile_name, deleted_at)
+    aliases = connection.execute("SELECT alias_sync_id FROM sync_id_aliases WHERE table_name='vocabulary_entries' AND canonical_sync_id=?", (normalized_term,)).fetchall()
+    for alias in aliases:
+        _record_tombstone(connection, 'vocabulary_entries', str(alias[0]), profile_name, deleted_at)
     if entry is None:
         return
     entry_id = int(entry["id"])
@@ -1011,11 +1251,11 @@ def _vocabulary_delete_tombstones(
         occ_profile = profile_name or _profile_for(connection, "unit", occ["unit_id"])
         if not occ_profile:
             occ_profile = _profile_for(connection, "question", occ["question_id"])
-        _record_tombstone(connection, "vocabulary_occurrences", str(occ["sync_id"]), occ_profile)
+        _record_tombstone(connection, "vocabulary_occurrences", str(occ["sync_id"]), occ_profile, deleted_at)
     for review in connection.execute(
         "SELECT sync_id FROM vocabulary_reviews WHERE entry_id = ?", (entry_id,)
     ).fetchall():
-        _record_tombstone(connection, "vocabulary_reviews", str(review["sync_id"]), "")
+        _record_tombstone(connection, "vocabulary_reviews", str(review["sync_id"]), "", deleted_at)
 
 
 def _apply_tombstone(
@@ -1023,18 +1263,22 @@ def _apply_tombstone(
     tombstone: dict[str, Any],
 ) -> bool:
     table = str(tombstone.get("table_name") or "")
+    if table == "ai_profiles":
+        return False
     object_key = str(tombstone.get("object_key") or "")
     profile_name = str(tombstone.get("profile_name") or "")
     deleted_at = str(tombstone.get("deleted_at") or "")
     if table not in SYNC_TABLES or not object_key:
         return False
+    if not isinstance(tombstone.get("deleted_at"), str) or not deleted_at.strip():
+        raise ValueError("Remote tombstone requires deleted_at")
     canonical_key = _canonical_object_key(connection, table, object_key)
     local_ts = _local_updated_at(connection, table, canonical_key)
     if not deleted_at or not local_ts or deleted_at >= local_ts:
         if table == "vocabulary_entries":
-            _vocabulary_delete_tombstones(connection, canonical_key, profile_name)
+            _vocabulary_delete_tombstones(connection, canonical_key, profile_name, deleted_at or None)
         _delete_local_row(connection, table, canonical_key)
-    _record_tombstone(connection, table, canonical_key, profile_name)
+    _record_tombstone(connection, table, canonical_key, profile_name, deleted_at or None)
     return True
 
 
@@ -1043,6 +1287,7 @@ def merge(
     changes: dict[str, list[dict[str, Any]]],
     tombstones: list[dict[str, Any]],
     allowed_profiles: Iterable[str] | None = None,
+    *, category: str | None = None,
 ) -> dict[str, int]:
     """Merge client changes (and tombstones) with last-write-wins semantics."""
     _ensure_sync_columns(connection)
@@ -1069,6 +1314,14 @@ def merge(
             table = str(tombstone.get("table_name") or "")
             if not _payload_in_profile_scope(table, tombstone, profile_scope):
                 continue
+            if category == "practice" and table == "practice_sessions":
+                session = _sync_row(connection, table, str(tombstone.get("object_key") or ""))
+                if session:
+                    deleted_at = str(tombstone.get("deleted_at") or "")
+                    local_ts = str(session["updated_at"] or "")
+                    if ((not deleted_at or not local_ts or deleted_at >= local_ts)
+                            and connection.execute("SELECT 1 FROM wrong_retry_rounds WHERE session_id = ?", (session["_rowid"],)).fetchone()):
+                        raise ValueError("Session deletion would cascade into the wrong-book category")
             if _apply_tombstone(connection, tombstone):
                 tombstone_count += 1
         applied["_tombstones"] = tombstone_count
@@ -1083,25 +1336,29 @@ def merge(
 
 
 def reset_passcode(connection: sqlite3.Connection) -> str:
-    """Regenerate the passcode and drop all active tokens.
-
-    The paired-device inventory is retained, but every device must use the new
-    passcode on its next handshake.
-    """
+    """Regenerate the passcode while keeping explicitly paired devices bound."""
     with _tokens_lock:
+        clear_pairing_invitation()
+        _token_transports.clear()
         _tokens.clear()
         _token_profiles.clear()
-    return set_passcode(connection)
+        _token_devices.clear()
+        _token_categories.clear()
+        return set_passcode(connection)
 
 
 def revoke_all_devices(connection: sqlite3.Connection) -> int:
     """Unpair every device so each one must present the current passcode again."""
-    _ensure_paired_devices_table(connection)
-    cursor = connection.execute("DELETE FROM sync_paired_devices")
     with _tokens_lock:
+        clear_pairing_invitation()
+        _token_transports.clear()
+        _ensure_paired_devices_table(connection)
+        cursor = connection.execute("DELETE FROM sync_paired_devices")
+        connection.commit()
         _tokens.clear()
         _token_profiles.clear()
-    connection.commit()
+        _token_devices.clear()
+        _token_categories.clear()
     return int(cursor.rowcount)
 
 
@@ -1110,11 +1367,15 @@ def sync_enabled(connection: sqlite3.Connection) -> bool:
 
 
 def disable_sync(connection: sqlite3.Connection) -> None:
-    _write_setting(connection, ENABLED_SETTING, "0")
     with _tokens_lock:
+        clear_pairing_invitation()
+        _token_transports.clear()
+        _write_setting(connection, ENABLED_SETTING, "0")
+        connection.commit()
         _tokens.clear()
         _token_profiles.clear()
-    connection.commit()
+        _token_devices.clear()
+        _token_categories.clear()
 
 
 def touch_last_sync(connection: sqlite3.Connection) -> None:
@@ -1147,16 +1408,6 @@ def sync_status(connection: sqlite3.Connection) -> dict[str, Any]:
 
 def _local_host_urls() -> list[str]:
     """Return private IPv4 candidates clients on the same LAN can use."""
-    addresses: set[str] = set()
-    try:
-        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-            address = str(info[4][0])
-            if address.startswith(("10.", "192.168.")):
-                addresses.add(address)
-            elif address.startswith("172."):
-                second = int(address.split(".")[1])
-                if 16 <= second <= 31:
-                    addresses.add(address)
-    except (OSError, ValueError, IndexError):
-        pass
-    return [f"http://{address}:8766" for address in sorted(addresses)]
+    from ..lan_addresses import local_ipv4_addresses
+    from ..config import LAN_SYNC_PORT
+    return [f"http://{address}:{LAN_SYNC_PORT}" for address in local_ipv4_addresses()]

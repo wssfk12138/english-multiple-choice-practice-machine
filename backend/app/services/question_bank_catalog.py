@@ -160,7 +160,19 @@ def find_package(catalog: dict[str, Any], package_id: str, content_version: str)
     raise QuestionBankCatalogError("所选题库已不在当前远程目录中，请刷新后重试")
 
 
-def download_package(package: dict[str, Any], target_dir: Path, *, timeout: float = 60) -> Path:
+def download_package(package: dict[str, Any], target_dir: Path, *, timeout: float = 60, public_proxy_fallback: bool = False) -> Path:
+    from .official_download_sources import official_download_sources
+    sources = official_download_sources(package["downloadUrl"], public_proxy_fallback)
+    for index, source in enumerate(sources):
+        try:
+            return _download_package({**package, "downloadUrl": source}, target_dir, timeout=timeout)
+        except QuestionBankCatalogError:
+            if index == len(sources) - 1:
+                raise
+    raise QuestionBankCatalogError("没有可用的题库下载地址")
+
+
+def _download_package(package: dict[str, Any], target_dir: Path, *, timeout: float = 60) -> Path:
     request = urllib.request.Request(package["downloadUrl"], headers={"Accept": "application/vnd.english-study-question-bank, application/zip", "User-Agent": "EnglishPracticeMachine-QuestionBanks/1"})
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / f"{uuid.uuid4().hex}.esq"

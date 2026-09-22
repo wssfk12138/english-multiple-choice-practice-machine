@@ -153,7 +153,8 @@ class ChatCompletionRetryTests(unittest.TestCase):
         with (
             patch("backend.app.services.ai_client.httpx.Client", FakeClient),
             patch("backend.app.services.ai_client.time.sleep"),
-            patch("backend.app.services.ai_client.unprotect_text", return_value="test-key"),
+            patch("backend.app.services.ai_client.model_keys.summary", return_value={}),
+            patch("backend.app.services.ai_client.model_keys.selected", return_value="test-key"),
         ):
             result = chat_completion(
                 connection,

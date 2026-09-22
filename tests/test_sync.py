@@ -70,9 +70,9 @@ class LanSyncMergeTests(unittest.TestCase):
         self.assertEqual(self.connection.execute(
             'SELECT name FROM ai_profiles WHERE is_default = 1'
         ).fetchone()[0], 'Local device')
-        self.assertEqual(self.connection.execute(
+        self.assertIsNone(self.connection.execute(
             "SELECT COALESCE(api_key_encrypted, '') FROM ai_profiles WHERE name = 'Remote device'"
-        ).fetchone()[0], '')
+        ).fetchone(), 'S4 requires the separate credential exchange')
         sync.merge(self.connection, {'ai_profiles': [{
             'name': 'Local device', 'is_default': 0,
             'base_url': 'https://changed.invalid/v1',
@@ -90,16 +90,16 @@ class LanSyncMergeTests(unittest.TestCase):
                             for item in exported['changes']['ai_profiles']))
         self.assertEqual(sync.merge(self.connection, {'ai_profiles': [remote]}, [])['ai_profiles'], 0)
 
-    def test_remote_default_can_fill_empty_device_preference(self) -> None:
+    def test_legacy_models_cannot_fill_empty_device_preference(self) -> None:
         self.connection.execute("DELETE FROM ai_profiles")
         self.connection.commit()
         sync.merge(self.connection, {'ai_profiles': [{
             'name': 'First profile', 'is_default': 1, 'updated_at': '2030-01-01',
             'base_url': 'https://example.invalid/v1',
         }]}, [])
-        self.assertEqual(self.connection.execute(
+        self.assertIsNone(self.connection.execute(
             "SELECT is_default FROM ai_profiles WHERE name = 'First profile'"
-        ).fetchone()[0], 1)
+        ).fetchone())
 
     def answer_payload(
         self,

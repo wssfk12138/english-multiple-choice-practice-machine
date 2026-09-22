@@ -4,9 +4,10 @@ import json
 import sqlite3
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 
-from ..database import get_db
+from ..database import get_db, get_active_profile_id
+from ..services.wrong_analysis_history import history as analysis_history, report_unit_ids
 from ..schemas import (
     AiAnalyzeRequest,
     AiChatRequest,
@@ -20,7 +21,8 @@ from ..schemas import (
     AiQuestionLabelUpdate,
     AiSettingsUpdate,
 )
-from ..security import protect_text
+from ..services import model_keys
+from pydantic import BaseModel, Field
 from ..services.ai_client import (
     chat_completion,
     ensure_ai_model_catalog,
@@ -46,6 +48,26 @@ from ..services.wrong_analysis import (
 
 
 router = APIRouter(prefix="/ai", tags=["ai"])
+
+
+class NamedKeyWrite(BaseModel):
+    action: str = Field(max_length=16)
+    name: str = Field(default="", max_length=100)
+    value: str = Field(default="", max_length=8192, repr=False)
+    identity: str = Field(default="", max_length=64)
+
+
+@router.post("/profiles/{profile_id}/keys")
+async def edit_profile_key(profile_id: int, request: Request, connection: sqlite3.Connection = Depends(get_db)):
+    try:
+        raw = await request.body()
+        if len(raw) > 16384:
+            raise ValueError()
+        payload = NamedKeyWrite.model_validate_json(raw)
+        return model_keys.edit(connection, _profile_or_404(connection, profile_id),
+                               payload.action, payload.name, payload.value, payload.identity)
+    except (ValueError, OSError):
+        raise HTTPException(400, "密钥操作失败，请检查名称、选择和安全存储") from None
 
 
 def _profile_payload(row: sqlite3.Row) -> dict:
@@ -125,9 +147,8 @@ def update_settings(
         "SELECT api_key_encrypted FROM ai_profiles WHERE id = ?",
         (profile["id"],),
     ).fetchone()
-    encrypted = current["api_key_encrypted"] if current else None
-    if request.api_key:
-        encrypted = protect_text(request.api_key)
+    model_keys.legacy_write(connection, _profile_or_404(connection, profile["id"]), request.api_key)
+    encrypted = None
     connection.execute("UPDATE ai_profiles SET is_default = 0 WHERE id <> ?", (profile["id"],))
     connection.execute(
         """
@@ -140,7 +161,7 @@ def update_settings(
         (
             request.name,
             normalize_adapter(request.adapter),
-            request.base_url.rstrip("/"),
+            request.base_url.strip(),
             encrypted,
             request.model,
             request.temperature,
@@ -210,7 +231,7 @@ def list_profiles(connection: sqlite3.Connection = Depends(get_db)) -> list[dict
     ).fetchall()
     profiles: list[dict] = []
     for row in rows:
-        payload = _profile_payload(row)
+        payload = {**_profile_payload(row), **model_keys.summary(connection, row)}
         models = connection.execute(
             """
             SELECT model_id, display_name, owned_by, provider,
@@ -242,7 +263,7 @@ def create_profile(
         raise HTTPException(400, "请填写配置名称")
     if not request.base_url.strip():
         raise HTTPException(400, "请填写 API Base URL")
-    encrypted = protect_text(request.api_key.strip()) if request.api_key else None
+    encrypted = None
     has_profiles = connection.execute(
         "SELECT 1 FROM ai_profiles LIMIT 1"
     ).fetchone()
@@ -259,7 +280,7 @@ def create_profile(
         (
             request.name.strip(),
             normalize_adapter(request.adapter),
-            request.base_url.strip().rstrip("/"),
+            request.base_url.strip(),
             encrypted,
             int(request.enabled),
             int(make_default),
@@ -271,6 +292,8 @@ def create_profile(
         ),
     )
     profile_id = int(cursor.lastrowid)
+    connection.commit()
+    model_keys.legacy_write(connection, _profile_or_404(connection, profile_id), request.api_key)
     if request.default_model.strip():
         connection.execute(
             """
@@ -293,11 +316,8 @@ def update_profile(
     current = _profile_or_404(connection, profile_id)
     if not request.name.strip() or not request.base_url.strip():
         raise HTTPException(400, "配置名称和 API Base URL 不能为空")
-    encrypted = current["api_key_encrypted"]
-    if request.clear_api_key:
-        encrypted = None
-    elif request.api_key:
-        encrypted = protect_text(request.api_key.strip())
+    model_keys.legacy_write(connection, current, request.api_key, request.clear_api_key)
+    encrypted = None
     make_default = request.is_default or bool(current["is_default"])
     if make_default:
         connection.execute(
@@ -315,7 +335,7 @@ def update_profile(
         (
             request.name.strip(),
             normalize_adapter(request.adapter),
-            request.base_url.strip().rstrip("/"),
+            request.base_url.strip(),
             encrypted,
             int(request.enabled),
             int(make_default),
@@ -352,9 +372,11 @@ def delete_profile(
     count = connection.execute("SELECT COUNT(*) AS total FROM ai_profiles").fetchone()
     if count["total"] <= 1:
         raise HTTPException(409, "至少保留一个 API 配置")
-    connection.execute("DELETE FROM ai_profiles WHERE id = ?", (profile_id,))
-    _ensure_default_profile(connection)
-    connection.commit()
+    with model_keys.LOCK:
+        model_keys.suppress_profile(connection, _profile_or_404(connection, profile_id))
+        connection.execute("DELETE FROM ai_profiles WHERE id = ?", (profile_id,))
+        _ensure_default_profile(connection)
+        connection.commit()
     return {"ok": True}
 
 
@@ -368,7 +390,7 @@ def sync_profile_models(
         result = list_available_models(
             connection,
             base_url=profile["base_url"],
-            use_saved_api_key=bool(profile["api_key_encrypted"]),
+            use_saved_api_key=model_keys.summary(connection, profile)["has_api_key"],
             profile_id=profile_id,
             adapter=profile["adapter"],
         )
@@ -892,6 +914,14 @@ def analyze_wrong(
     }
 
 
+@router.get("/wrong-analysis-history")
+def wrong_analysis_history(unit_id: int = Query(gt=0), offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100), connection: sqlite3.Connection = Depends(get_db)) -> dict:
+    try:
+        return analysis_history(connection, unit_id, offset, limit)
+    except LookupError as error:
+        raise HTTPException(404, str(error)) from error
+
+
 @router.get("/wrong-analysis-status")
 def wrong_analysis_status(
     connection: sqlite3.Connection = Depends(get_db),
@@ -899,14 +929,21 @@ def wrong_analysis_status(
     rows = connection.execute(
         """
         SELECT s.unit_id, s.report_id, s.analyzed_session_id,
-               r.scope_key, r.scope_title, r.report, r.aggregate_data
+               r.scope_key, r.scope_title, r.report, r.aggregate_data, r.unit_ids
         FROM wrong_analysis_states s
         JOIN wrong_analysis_reports r ON r.id = s.report_id
+        JOIN units u ON u.id=s.unit_id JOIN papers p ON p.id=u.paper_id
+        WHERE p.profile_id=? AND p.deleted_at IS NULL
+          AND NOT EXISTS(SELECT 1 FROM wrong_analysis_hidden h WHERE h.unit_id=s.unit_id AND h.report_id=s.report_id)
         ORDER BY s.unit_id
-        """
+        """,
+        (get_active_profile_id(connection),)
     ).fetchall()
+    allowed = {row[0] for row in connection.execute('SELECT u.id FROM units u JOIN papers p ON p.id=u.paper_id WHERE p.profile_id=? AND p.deleted_at IS NULL', (get_active_profile_id(connection),))}
     units = []
     for row in rows:
+        if not report_unit_ids(row).issubset(allowed):
+            continue
         completed = connection.execute(
             """
             SELECT 1 FROM practice_unit_submissions
@@ -1041,7 +1078,8 @@ def list_question_labels(
                l.primary_skill, l.secondary_skills, l.trap_types,
                l.attention_points, l.vocabulary_demand,
                l.context_dependency, l.grammar_dependency, l.confidence,
-               l.locked, l.user_edited, l.model_name, l.updated_at
+               l.locked, l.user_edited, l.model_name, l.updated_at,
+               CASE WHEN l.question_id IS NOT NULL AND l.label_version <= COALESCE(json_extract(u.shared_data, '$.label_review_versions."' || q.external_key || '"'), 0) THEN 1 ELSE 0 END AS content_review_required
         FROM questions AS q
         JOIN units AS u ON u.id = q.unit_id
         JOIN papers AS p ON p.id = u.paper_id

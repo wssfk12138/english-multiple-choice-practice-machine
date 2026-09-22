@@ -257,6 +257,8 @@ defineExpose({ pause })
           @loadedmetadata="onLoadedMetadata"
           @canplay="onCanPlay"
           @play="onPlay"
+          @playing="loading=false"
+          @waiting="loading=true"
           @pause="playing=false"
           @ended="playing=false"
           @timeupdate="onTimeUpdate"

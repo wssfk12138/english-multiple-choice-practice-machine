@@ -1,13 +1,16 @@
 <script setup lang="ts">
-import { ArrowRight, BookOpen, Headphones, Sparkles, Star } from 'lucide-vue-next'
+import { TextCursorInput, ListOrdered, Headphones, Files, ListChecks, ArrowRight, BookOpen, Sparkles, Star } from 'lucide-vue-next'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { get, post } from '../api'
 import QuestionBankSwitcher from '../components/QuestionBankSwitcher.vue'
+import StudyTodos from '../components/StudyTodos.vue'
+import '../dashboard-glass.css'
 
 const router = useRouter()
 const data = ref<any>(null)
 const error = ref('')
+const tasksRevision = ref(0)
 const vocabulary = ref<any[]>([])
 const tickerPaused = ref(false)
 const vocabularyPage = ref(0)
@@ -59,6 +62,7 @@ function wait(milliseconds: number) {
 }
 
 async function loadHome() {
+  tasksRevision.value += 1
   error.value = ''
   const embedded = (window as any).__LINJIAN_STARTUP__
   if (embedded) {
@@ -123,16 +127,9 @@ async function randomPractice(type: string) {
 </script>
 
 <template>
-  <div class="page">
-    <div class="page-head study-hero">
-      <div class="study-hero-copy">
-        <span class="eyebrow">YOUR QUIET STUDY SPACE</span>
-        <h1>今天想练些什么？</h1>
-        <p class="lead">选一篇文章，留一点安静的时间给自己。</p>
-        <RouterLink class="button" to="/library"><BookOpen :size="17" />查看全部题库<ArrowRight :size="16" /></RouterLink>
-      </div>
-    </div>
-    <QuestionBankSwitcher @changed="loadHome" />
+  <div class="page glass-dashboard">
+    <div class="dashboard-bank-row"><QuestionBankSwitcher @changed="loadHome" /><RouterLink class="button ghost compact" to="/library"><BookOpen :size="17" />查看全部题库<ArrowRight :size="16" /></RouterLink></div>
+    <StudyTodos :key="tasksRevision" />
     <div v-if="error" class="warning">{{ error }}</div>
     <section v-if="vocabulary.length" class="vocabulary-ticker card" @mouseenter="tickerPaused=true" @mouseleave="tickerPaused=false">
       <div class="ticker-heading"><div><span class="eyebrow">VOCABULARY REVIEW</span><h3>词汇回顾</h3></div><RouterLink to="/vocabulary">查看单词本 →</RouterLink></div>
@@ -150,25 +147,26 @@ async function randomPractice(type: string) {
         </Transition>
       </div>
     </section>
+    <div v-if="hasAnyPractice" class="section-title"><h2>题型练习</h2></div>
     <div v-if="hasAnyPractice" class="grid practice-actions" :class="practiceGridClass">
       <button v-if="hasPracticeType('cloze')" class="card action-card" type="button" @click="randomPractice('cloze')">
-        <span class="feature-icon orange"><img src="/assets/icons/cloze.png" alt="" /></span>
-        <span class="action-copy"><small>20 个空 · 整篇提交</small><h3>完型填空</h3><p>随机抽取一整篇，在完整语境中完成练习。</p></span>
+        <span class="feature-icon orange"><TextCursorInput :size="28" /></span>
+        <span class="action-copy"><h3>完形填空</h3></span>
         <ArrowRight class="action-arrow" :size="19" />
       </button>
       <button v-if="hasPracticeType('reading')" class="card action-card" type="button" @click="randomPractice('reading')">
-        <span class="feature-icon sage"><img src="/assets/icons/reading.png" alt="" /></span>
-        <span class="action-copy"><small>1 篇文章 · 5 道题</small><h3>阅读理解</h3><p>按文章完整练习，专注理解论证与细节。</p></span>
+        <span class="feature-icon sage"><BookOpen :size="28" /></span>
+        <span class="action-copy"><h3>阅读理解</h3></span>
         <ArrowRight class="action-arrow" :size="19" />
       </button>
       <button v-if="hasPracticeType('part_b')" class="card action-card" type="button" @click="randomPractice('part_b')">
-        <span class="feature-icon blue"><img src="/assets/icons/part-b.png" alt="" /></span>
-        <span class="action-copy"><small>排序 · 填入 · 匹配</small><h3>阅读 Part B</h3><p>在段落关系中辨认结构、衔接与观点。</p></span>
+        <span class="feature-icon blue"><ListOrdered :size="28" /></span>
+        <span class="action-copy"><h3>阅读 Part B</h3></span>
         <ArrowRight class="action-arrow" :size="19" />
       </button>
       <button v-if="hasListening" class="card action-card" type="button" @click="randomPractice('listening')">
         <span class="feature-icon purple"><Headphones :size="42" aria-hidden="true" /></span>
-        <span class="action-copy"><small>随机一套 · 完整听力</small><h3>听力单刷</h3><p>抽取一套试卷的完整听力部分，音频跨 Section 自动续播。</p></span>
+        <span class="action-copy"><h3>听力练习</h3></span>
         <ArrowRight class="action-arrow" :size="19" />
       </button>
     </div>
@@ -176,18 +174,18 @@ async function randomPractice(type: string) {
       当前题库配置中还没有可练习的已发布题目，请先切换题库配置或导入题库。
       <RouterLink class="button ghost compact" to="/library">前往题库</RouterLink>
     </div>
-    <div class="section-title"><h2>学习概览</h2></div>
-    <div v-if="data" class="grid grid-4">
-      <div class="card"><span class="stat-label">已收录年份</span><div class="stat-value">{{ data.paper_count }}</div></div>
-      <div class="card"><span class="stat-label">练习篇目</span><div class="stat-value">{{ data.unit_count }}</div></div>
-      <div class="card"><span class="stat-label">客观题</span><div class="stat-value">{{ data.question_count }}</div></div>
-      <RouterLink to="/wrong" class="card stat-card linked"><span class="stat-label">高频错题</span><div class="stat-value">{{ data.frequent_count }}</div><span class="stat-link">去复习 <ArrowRight :size="14" /></span></RouterLink>
-    </div>
-    <div v-else class="loading">正在整理书桌…</div>
-    <div class="section-title"><h2>温柔提醒</h2></div>
-    <div class="card gentle-reminder">
-      <span class="icon blue" style="margin:0"><Sparkles /></span>
-      <div><h3>理解文章，比记住答案更重要。</h3><p class="lead">选项可以每次打乱，但文章中的逻辑不会改变。</p></div>
-    </div>
+    <section v-if="data" class="dashboard-bank-summary" aria-label="题库概览">
+        <h2>题库概览</h2>
+        <dl class="overview-grid">
+          <div class="overview-stat"><dt><span>试卷</span><Files aria-hidden="true" /></dt><dd>{{ data.paper_count }}<small>套</small></dd></div>
+          <div class="overview-stat"><dt><span>篇目</span><BookOpen aria-hidden="true" /></dt><dd>{{ data.unit_count }}<small>篇</small></dd></div>
+          <div class="overview-stat"><dt><span>客观题</span><ListChecks aria-hidden="true" /></dt><dd>{{ data.question_count }}<small>道</small></dd></div>
+        </dl>
+      </section>
   </div>
 </template>
+
+
+<style scoped>
+.dashboard-bank-row{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}.dashboard-bank-row :deep(.bank-switcher){flex:1;min-width:0;margin:0}.dashboard-bank-row>.button{flex-shrink:0}.dashboard-bank-summary{display:flex;align-items:baseline;flex-wrap:wrap;gap:8px 20px;padding:14px 0;border-top:1px solid var(--line);color:var(--muted)}.dashboard-bank-summary h2{margin:0;font-size:.95rem;color:var(--ink)}.dashboard-bank-summary span{font-size:.88rem}.section-title h2{font-size:1.1rem;letter-spacing:0}
+</style>

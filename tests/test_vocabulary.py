@@ -80,6 +80,7 @@ class VocabularyTests(unittest.TestCase):
                 {
                     "entryId": first["entry_id"],
                     "lemma": "claim",
+                    "morphology": {"lemma": "claim", "currentForm": "第三人称单数", "forms": []},
                     "phonetic": "",
                     "partOfSpeech": "v.",
                     "contextualMeaning": "声称",
@@ -89,6 +90,7 @@ class VocabularyTests(unittest.TestCase):
                 {
                     "entryId": second["entry_id"],
                     "lemma": "evidence",
+                    "morphology": {"lemma": "evidence", "currentForm": "原形", "forms": []},
                     "phonetic": "",
                     "partOfSpeech": "n.",
                     "contextualMeaning": "证据",
@@ -129,10 +131,10 @@ class VocabularyTests(unittest.TestCase):
     def test_normalization_is_case_and_spacing_insensitive(self) -> None:
         self.assertEqual(normalize_term("  Artificial   Intelligence "), "artificial intelligence")
 
-    def test_common_inflections_share_a_vocabulary_key(self) -> None:
-        self.assertEqual(vocabulary_key("claims"), "claim")
-        self.assertEqual(vocabulary_key("claimed"), "claim")
-        self.assertEqual(vocabulary_key("claiming"), "claim")
+    def test_inflections_have_distinct_vocabulary_keys(self) -> None:
+        self.assertEqual(vocabulary_key("claims"), "claims")
+        self.assertEqual(vocabulary_key("claimed"), "claimed")
+        self.assertEqual(vocabulary_key("claiming"), "claiming")
 
     def test_more_than_five_words_are_rejected(self) -> None:
         with self.assertRaises(ValueError):
@@ -210,6 +212,7 @@ class VocabularyTests(unittest.TestCase):
                 {
                     "entryId": first["entry_id"],
                     "lemma": "claim",
+                    "morphology": {"lemma": "claim", "currentForm": "第三人称单数", "forms": []},
                     "phonetic": "",
                     "partOfSpeech": "v.",
                     "contextualMeaning": "声称",
@@ -225,6 +228,7 @@ class VocabularyTests(unittest.TestCase):
                 {
                     "entryId": second["entry_id"],
                     "lemma": "evidence",
+                    "morphology": {"lemma": "evidence", "currentForm": "原形", "forms": []},
                     "phonetic": "",
                     "partOfSpeech": "n.",
                     "contextualMeaning": "证据",

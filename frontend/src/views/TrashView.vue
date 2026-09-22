@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { confirmDesktop } from '../services/desktopConfirm'
 import { RotateCcw, Trash2 } from 'lucide-vue-next'
 import { onMounted, ref } from 'vue'
 import { del, get, post } from '../api'
@@ -11,7 +12,7 @@ async function load() {
 }
 
 function typeLabel(type: string) {
-  return ({ profile: '题库配置', paper: '试卷', import_job: '导入草稿' } as Record<string, string>)[type] || type
+  return ({ profile: '题库配置', paper: '试卷', import_job: '导入草稿', wrong_archive: '错题与分析记录' } as Record<string, string>)[type] || type
 }
 
 function purgeText(value: string) {
@@ -27,7 +28,7 @@ async function restore(item: any) {
 }
 
 async function purge(item: any) {
-  if (!window.confirm(`永久删除“${item.resource_name}”？此操作无法恢复。`)) return
+  if (!await confirmDesktop(`永久删除“${item.resource_name}”？此操作无法恢复。`)) return
   try {
     await del(`/trash/${item.id}`)
     await load()

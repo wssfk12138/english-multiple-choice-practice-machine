@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import socket
 import sys
@@ -9,9 +10,11 @@ import urllib.request
 import webbrowser
 
 import uvicorn
+from backend.app.config import APP_VARIANT, DATA_DIR
 
 
-URL = "http://127.0.0.1:8765"
+PORT = int(os.environ.get("ENGLISH_PRACTICE_PORT", "8775"))
+URL = f"http://127.0.0.1:{PORT}"
 
 
 def ensure_windowless_stdio() -> None:
@@ -25,7 +28,10 @@ def ensure_windowless_stdio() -> None:
 def app_is_running() -> bool:
     try:
         with urllib.request.urlopen(f"{URL}/api/health", timeout=1) as response:
-            return response.status == 200 and b'"status":"ok"' in response.read(1024)
+            payload = json.loads(response.read(4096))
+            return (response.status == 200 and payload.get("status") == "ok"
+                    and payload.get("variant") == APP_VARIANT
+                    and payload.get("data_dir") == str(DATA_DIR))
     except Exception:
         return False
 
@@ -33,7 +39,7 @@ def app_is_running() -> bool:
 def port_is_available() -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         try:
-            probe.bind(("127.0.0.1", 8765))
+            probe.bind(("127.0.0.1", PORT))
             return True
         except OSError:
             return False
@@ -42,9 +48,10 @@ def port_is_available() -> bool:
 def open_when_ready() -> None:
     for _ in range(80):
         try:
-            urllib.request.urlopen(f"{URL}/api/health", timeout=1)
-            webbrowser.open(URL)
-            return
+            if app_is_running():
+                webbrowser.open(URL)
+                return
+            time.sleep(0.25)
         except Exception:
             time.sleep(0.25)
 
@@ -64,7 +71,7 @@ def main() -> int:
 
     start_lan_sync_host_if_enabled()
     try:
-        uvicorn.run("backend.app.main:app", host="127.0.0.1", port=8765)
+        uvicorn.run("backend.app.main:app", host="127.0.0.1", port=PORT)
     finally:
         stop_lan_sync_host()
     return 0
@@ -72,4 +79,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

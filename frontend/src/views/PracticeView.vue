@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { selectedSourceSentence } from '../vocabulary-context'
 import {
   AlertCircle,
   ArrowLeft,
@@ -15,7 +16,10 @@ import {
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { get, post, put } from '../api'
+import PracticeContentChoice from '../components/PracticeContentChoice.vue'
 import ContentBlocks from '../components/ContentBlocks.vue'
+import PassageBlank from '../components/PassageBlank.vue'
+import { splitPassageBlanks } from '../passage-blanks'
 import ListeningPlayer from '../components/ListeningPlayer.vue'
 
 const route = useRoute()
@@ -30,7 +34,7 @@ const highlightedQuestionId = ref<number | null>(null)
 const resultPanelVisible = ref(false)
 const resultPanelMode = ref<'unit' | 'session'>('unit')
 const resultPanelUnitId = ref<number | null>(null)
-const vocabMenu = ref({ visible: false, x: 0, y: 0, term: '', sentence: '', questionId: null as number | null })
+const vocabMenu = ref({ visible: false, x: 0, y: 0, term: '', sentence: '', sourceKind: 'unknown', selectionStart: -1, questionId: null as number | null })
 const listeningPlayer = ref<InstanceType<typeof ListeningPlayer> | null>(null)
 const currentListeningQuestionId = ref<number | null>(null)
 const currentWordBankQuestionId = ref<number | null>(null)
@@ -49,6 +53,9 @@ const timerNow = ref(Date.now())
 let timerTicker: number | null = null
 const activeUnit = computed(() => session.value?.units?.[activeUnitIndex.value])
 const activeContentBlocks = computed(() => activeUnit.value?.content_blocks || [])
+const clozeBlankNumbers = computed<number[]>(() => activeUnit.value?.unit_type === 'cloze'
+  ? (activeUnit.value.questions || []).map((question: any) => Number(question.number)).filter(Number.isFinite)
+  : [])
 const activeContentPackage = computed(() => ({
   packageId: activeUnit.value?.shared_data?.content_package_id || '',
   contentVersion: activeUnit.value?.shared_data?.content_version || '',
@@ -146,6 +153,7 @@ type PassageSegment = {
 const passageSegments = computed<PassageSegment[]>(() => {
   const unit = activeUnit.value
   const passage = unit?.passage || '该题型请在右侧完成候选项匹配。'
+  if (unit?.unit_type === 'cloze') return splitPassageBlanks(passage, clozeBlankNumbers.value)
   const usesInlineBlanks = unit?.unit_type === 'cloze'
     || unit?.unit_type === 'word_bank'
     || (unit?.unit_type === 'part_b' && unit?.subtype !== 'true_false')
@@ -416,9 +424,31 @@ function finishTimer() {
   persistTimer()
 }
 
+const contentChoiceSessionId = ref<number | null>(null)
+const contentChoiceBusy = ref(false)
+const contentChoiceError = ref('')
+async function chooseContent(choice: 'continue' | 'restart') {
+  if (contentChoiceBusy.value || contentChoiceSessionId.value === null) return
+  contentChoiceBusy.value = true
+  contentChoiceError.value = ''
+  try {
+    const result: any = await post('/practice/sessions/' + contentChoiceSessionId.value + '/content-choice', {choice})
+    if (Number(route.params.id) !== Number(result.id)) await router.replace('/practice/' + result.id)
+    await load()
+  } catch (e) { contentChoiceError.value = String(e) }
+  finally { contentChoiceBusy.value = false }
+}
+
 async function load() {
   try {
-    session.value = await get(`/practice/sessions/${route.params.id}`)
+    const loaded: any = await get('/practice/sessions/' + route.params.id)
+    if (loaded.content_choice_required) {
+      session.value = null
+      contentChoiceSessionId.value = Number(loaded.id)
+      return
+    }
+    contentChoiceSessionId.value = null
+    session.value = loaded
     loadPendingVocabulary(session.value.id)
     initializeTimer()
     syncCurrentQuestionTargets()
@@ -670,24 +700,6 @@ function openUnitFromResult(unitId: number) {
   resultPanelVisible.value = false
 }
 
-function sentenceAround(text: string, term: string) {
-  const compact = text.replace(/\s+/g, ' ').trim()
-  const index = compact.toLowerCase().indexOf(term.toLowerCase())
-  if (index < 0) return compact.slice(0, 1200)
-  const left = Math.max(
-    compact.lastIndexOf('.', index - 1),
-    compact.lastIndexOf('!', index - 1),
-    compact.lastIndexOf('?', index - 1),
-  )
-  const endings = [
-    compact.indexOf('.', index + term.length),
-    compact.indexOf('!', index + term.length),
-    compact.indexOf('?', index + term.length),
-  ].filter(value => value >= 0)
-  const right = endings.length ? Math.min(...endings) + 1 : compact.length
-  return compact.slice(left + 1, right).trim().slice(0, 1500)
-}
-
 function openVocabularyMenu(event: MouseEvent) {
   const selection = window.getSelection()
   const term = selection?.toString().trim().replace(/\s+/g, ' ') || ''
@@ -700,12 +712,21 @@ function openVocabularyMenu(event: MouseEvent) {
   if (!source) return
   event.preventDefault()
   const question = target.closest<HTMLElement>('[data-question-id]')
+  const selectedRange = selection?.rangeCount ? selection.getRangeAt(0) : null
+  if (!selectedRange || !source.contains(selectedRange.startContainer) || !source.contains(selectedRange.endContainer)) return
+  const sourceRange = selectedRange.cloneRange()
+  sourceRange.selectNodeContents(source)
+  const sourceText = sourceRange.toString()
+  sourceRange.setEnd(selectedRange.startContainer, selectedRange.startOffset)
+  const selectionStart = sourceRange.toString().length + (selectedRange.toString().length - selectedRange.toString().trimStart().length)
   vocabMenu.value = {
     visible: true,
     x: Math.min(event.clientX, window.innerWidth - 220),
     y: Math.min(event.clientY, window.innerHeight - 120),
     term,
-    sentence: sentenceAround(source.innerText || source.textContent || '', term),
+    sentence: selectedSourceSentence(sourceText, term, selectionStart),
+    sourceKind: source.closest('.option, .candidate-reference, .ordering-paragraph') ? 'option' : source.closest('.passage') ? 'passage' : 'question',
+    selectionStart,
     questionId: question?.dataset.questionId ? Number(question.dataset.questionId) : null,
   }
 }
@@ -717,6 +738,8 @@ async function addSelectedVocabulary() {
     const result: any = await post('/vocabulary', {
       term: item.term,
       context_sentence: item.sentence,
+      source_kind: item.sourceKind,
+      selection_start: item.selectionStart,
       unit_id: activeUnit.value.id,
       question_id: item.questionId,
       year: activeUnit.value.year,
@@ -743,7 +766,8 @@ async function copySelectedTerm() {
 </script>
 
 <template>
-  <div class="practice-page" @click="vocabMenu.visible=false">
+  <PracticeContentChoice v-if="contentChoiceSessionId !== null" :busy="contentChoiceBusy" :error="contentChoiceError" @choose="chooseContent" />
+  <div v-else class="practice-page" @click="vocabMenu.visible=false">
     <header class="practice-top">
       <div style="display:flex;align-items:center;gap:18px">
         <button class="button ghost" @click="router.push('/library')"><ArrowLeft :size="18" />退出</button>
@@ -812,6 +836,7 @@ async function copySelectedTerm() {
           <ContentBlocks
             v-if="activeContentBlocks.length"
             :blocks="activeContentBlocks"
+            :blank-numbers="clozeBlankNumbers"
             :package-id="activeContentPackage.packageId"
             :content-version="activeContentPackage.contentVersion"
           />
@@ -819,9 +844,7 @@ async function copySelectedTerm() {
             <button v-if="segment.type === 'blank' && isWordBank" type="button" class="passage-blank word-bank-passage-blank" :class="{ selected: wordBankAnswerForBlank(segment.number) }" :disabled="activeUnitSubmitted" :aria-label="`第 ${segment.number} 空，${wordBankAnswerForBlank(segment.number) || '尚未选择词语'}`" @click="focusWordBankQuestion(segment.number)">
               <span class="word-bank-blank-number">{{ segment.number }}</span><span class="word-bank-blank-answer">{{ wordBankAnswerForBlank(segment.number) || '选择词语' }}</span>
             </button>
-            <span v-else-if="segment.type === 'blank'" class="passage-blank" :aria-label="`第 ${segment.number} 空`">
-              <span class="blank-number">{{ segment.number }}</span>
-            </span>
+            <PassageBlank v-else-if="segment.type === 'blank'" :number="segment.number" />
             <template v-else>{{ segment.text }}</template>
           </template>
         </div>

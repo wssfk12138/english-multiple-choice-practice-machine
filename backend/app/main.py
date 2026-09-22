@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import FRONTEND_DIST
+from .config import APP_VARIANT, DATA_DIR, FRONTEND_DIST
 from .database import connect, initialize_database
 from .routers import (
     ai,
@@ -35,10 +35,19 @@ from .services.trash import purge_expired
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     initialize_database()
+    with connect() as connection:
+        from .services.content_remediation import ensure_content_remediation
+        ensure_content_remediation(connection)
     install_bundled_question_banks()
     with connect() as connection:
         ensure_ai_model_catalog(connection)
         clean_machine_meanings(connection)
+        connection.execute("UPDATE vocabulary_enrichment_jobs SET state='queued' WHERE state='inflight'")
+        connection.execute(
+            "UPDATE vocabulary_entries SET translation_status = 'queued', translation_error = '' "
+            "WHERE user_edited = 0 AND translation_status = 'translating'"
+        )
+        connection.commit()
         purge_expired(connection)
         repair_published_listening_assets(connection)
     threading.Thread(
@@ -79,7 +88,7 @@ app.include_router(sync.router, prefix="/api")
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "variant": APP_VARIANT, "data_dir": str(DATA_DIR)}
 
 
 if FRONTEND_DIST.exists():

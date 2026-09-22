@@ -137,3 +137,9 @@ def dashboard(connection: sqlite3.Connection = Depends(get_db)) -> dict:
         "paper_type_counts": paper_type_counts,
         "recent_sessions": [dict(row) for row in recent],
     }
+
+
+@router.get("/study-todos")
+def get_study_todos(connection: sqlite3.Connection = Depends(get_db)) -> dict:
+    from ..services.study_todos import study_todos
+    return study_todos(connection)

@@ -248,6 +248,7 @@ class LanSyncHostLifecycleTests(unittest.TestCase):
 
         initialize.assert_called_once_with()
         connect.assert_called_once_with()
+        connection.close.assert_called_once_with()
 
     def test_start_rejects_an_occupied_port(self) -> None:
         occupied = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -354,6 +355,8 @@ class LanSyncHostActualSocketTests(unittest.TestCase):
             self.database_path,
         )
         self.database_patch.start()
+        self.tls_patch = patch("backend.app.lan_tls_host.start_tls_host", return_value=True)
+        self.tls_patch.start()
         database.initialize_database()
 
         with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as probe:
@@ -371,6 +374,7 @@ class LanSyncHostActualSocketTests(unittest.TestCase):
         self.port_patch.stop()
         self.host_patch.stop()
         self.database_patch.stop()
+        self.tls_patch.stop()
         self.temp_dir.cleanup()
 
     def port_is_open(self) -> bool:

@@ -187,6 +187,8 @@ class ModelAssistRequest(BaseModel):
 
 class VocabularyCreate(BaseModel):
     term: str
+    source_kind: Literal["unknown", "passage", "option", "question", "fragment"] = "unknown"
+    selection_start: int = Field(default=-1, ge=-1)
     context_sentence: str = ""
     context_before: str = ""
     context_after: str = ""
@@ -203,6 +205,7 @@ class VocabularyTranslationRunRequest(BaseModel):
         "unit_submit",
         "session_submit",
         "practice_exit",
+        "vocabulary_open",
         "startup",
         "manual",
     ] = "manual"
@@ -219,16 +222,27 @@ class VocabularyUpdate(BaseModel):
 
 
 class VocabularyReview(BaseModel):
-    rating: Literal["again", "hard", "mastered"]
+    expected_revision: str | None = Field(default=None, max_length=2048)
+    rating: Literal["again", "hard", "mastered", "know", "fluent"]
+    mode: Literal["scheduled", "reinforcement"] = "scheduled"
+
+
+class VocabularyEnrichmentRunRequest(BaseModel):
+    action: Literal["start", "pause", "resume", "retry"]
 
 
 class LanSyncHandshake(BaseModel):
-    passcode: str = Field(min_length=1, max_length=64)
+    categories: list[str] | None = Field(default=None, max_length=5)
+    host_id: str = Field(default="", max_length=36)
+    pairing_code: str = Field(default="", max_length=128)
+    passcode: str = Field(default="", max_length=64)
+    pairing_token: str = Field(default="", max_length=256)
     device_id: str = Field(default="", max_length=128)
     profile_names: list[str] = Field(default_factory=list, max_length=200)
 
 
 class LanSyncPullRequest(BaseModel):
+    category: str | None = Field(default=None, max_length=32)
     token: str = Field(min_length=1, max_length=128)
     tables: list[str] = Field(default_factory=list, max_length=64)
     cursor: dict[str, dict[str, Any]] = Field(default_factory=dict)
@@ -236,6 +250,7 @@ class LanSyncPullRequest(BaseModel):
 
 
 class LanSyncPushRequest(BaseModel):
+    category: str | None = Field(default=None, max_length=32)
     token: str = Field(min_length=1, max_length=128)
     changes: dict[str, list[dict[str, Any]]] = Field(default_factory=dict, max_length=64)
     tombstones: list[dict[str, Any]] = Field(default_factory=list, max_length=10_000)

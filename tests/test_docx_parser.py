@@ -169,15 +169,16 @@ class OoxmlBlankExtractionTests(unittest.TestCase):
             "First paragraph. 41 ______ Second paragraph. 42 ______ Third.",
         )
 
-    def test_missing_number_at_broken_text_frame_is_recovered(self) -> None:
+    def test_paragraph_break_alone_does_not_invent_missing_number(self) -> None:
         passage = (
             "shifting 6 and climate change eroded a barrier that\n\n"
             "Pavlopetri. A survey was\n\n"
             "data to analyze sea levels 9 British researchers returned."
         )
         repaired = _ensure_numbered_blanks(passage, range(6, 10))
-        self.assertIn("barrier that 7 ______ Pavlopetri", repaired)
-        self.assertIn("survey was 8 ______ data", repaired)
+        self.assertNotIn("7 ______", repaired)
+        self.assertNotIn("8 ______", repaired)
+        self.assertIn("barrier that\n\nPavlopetri", repaired)
 
     def test_duplicate_early_cloze_number_noise_is_removed(self) -> None:
         passage = (
@@ -309,12 +310,12 @@ class OoxmlBlankExtractionTests(unittest.TestCase):
                 "subtype": "cloze" if unit_type == "cloze" else "reading_a",
                 "title": title,
                 "sequence": sequence,
-                "passage": "Passage",
+                "passage": " ".join(f"word {n} ______" for n in numbers) if unit_type == "cloze" else "Passage",
                 "shared_data": {},
                 "questions": [
                     {
                         "number": number,
-                        "stem": "",
+                        "stem": "What does this passage suggest?",
                         "options": [
                             {"key": key, "content": key}
                             for key in ("A", "B", "C", "D")
@@ -353,7 +354,7 @@ class OoxmlBlankExtractionTests(unittest.TestCase):
                 "questions": [
                     {
                         "number": number,
-                        "stem": f"Question {number}",
+                        "stem": f"What is the answer to question {number}?",
                         "options": [
                             {"key": key, "content": key}
                             for key in ("A", "B", "C", "D")
@@ -397,7 +398,7 @@ class OoxmlBlankExtractionTests(unittest.TestCase):
                 "questions": [
                     {
                         "number": number,
-                        "stem": f"Question {number}",
+                        "stem": f"What is the answer to question {number}?",
                         "options": [
                             {"key": key, "content": key}
                             for key in ("A", "B", "C", "D")

@@ -107,3 +107,11 @@ def submit_current_unit(
         return submit_unit(connection, session_id, unit_id)
     except (ValueError, LookupError) as error:
         raise translate_error(error) from error
+
+@router.post("/sessions/{session_id}/content-choice")
+def content_choice(session_id: int, request: dict, connection: sqlite3.Connection = Depends(get_db)) -> dict:
+    from ..services.practice_snapshots import choose_snapshot
+    try:
+        return choose_snapshot(connection, session_id, request.get('choice', ''))
+    except (ValueError, LookupError) as error:
+        raise translate_error(error) from error

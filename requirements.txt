@@ -1,5 +1,8 @@
 fastapi==0.116.1
 uvicorn[standard]==0.35.0
+cryptography==45.0.6
+zeroconf==0.151.3
+ifaddr==0.2.0
 python-multipart==0.0.20
 httpx==0.28.1
 lxml==6.0.0

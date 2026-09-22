@@ -8,6 +8,7 @@ from ..config import UPLOAD_DIR
 from ..database import get_db
 from ..schemas import QuestionBankCatalogSettingsWrite, QuestionBankDownloadRequest
 from ..services.esq import EsqValidationError
+from ..services.official_download_sources import OFFICIAL_CATALOG, official_download_sources
 from ..services.question_bank_catalog import (
     QuestionBankCatalogError, download_package, fetch_catalog, find_package, validate_remote_url,
 )
@@ -21,6 +22,17 @@ SETTING_KEY = "question_bank_catalog_url"
 def _read_url(connection) -> str:
     row = connection.execute("SELECT value FROM app_settings WHERE key = ?", (SETTING_KEY,)).fetchone()
     return str(row["value"] if row else "")
+
+
+def _fetch_catalog(url: str) -> dict:
+    sources = official_download_sources(url, url == OFFICIAL_CATALOG)
+    for index, source in enumerate(sources):
+        try:
+            return {**fetch_catalog(source), "sourceUrl": source, "checkedSources": index + 1}
+        except QuestionBankCatalogError:
+            if index == len(sources) - 1:
+                raise
+    raise QuestionBankCatalogError("没有可用的题库目录地址")
 
 
 @router.get("/settings")
@@ -48,7 +60,7 @@ def check_catalog(connection=Depends(get_db)) -> dict:
     if not url:
         raise HTTPException(status_code=422, detail="尚未配置远程题库目录地址")
     try:
-        return fetch_catalog(url)
+        return _fetch_catalog(url)
     except QuestionBankCatalogError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -60,9 +72,9 @@ def download_question_bank(payload: QuestionBankDownloadRequest, connection=Depe
         raise HTTPException(status_code=422, detail="尚未配置远程题库目录地址")
     stored_path: Path | None = None
     try:
-        catalog = fetch_catalog(url)
+        catalog = _fetch_catalog(url)
         package = find_package(catalog, payload.package_id, payload.content_version)
-        stored_path = download_package(package, UPLOAD_DIR)
+        stored_path = download_package(package, UPLOAD_DIR, public_proxy_fallback=url == OFFICIAL_CATALOG)
         result = create_question_bank_import(connection, stored_path, package["fileName"])
         return {**result, "package_id": package["packageId"], "content_version": package["contentVersion"], "verified_size": package["size"], "verified_sha256": package["sha256"]}
     except HTTPException:

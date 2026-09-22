@@ -1,4 +1,10 @@
 <script setup lang="ts">
+import { confirmDesktop } from '../services/desktopConfirm'
+import VocabularyMaintenance from '../components/VocabularyMaintenance.vue'
+import { preferDefaultProfile, profileDrafts, profileSaveStates, saveProfileDraft, flushProfileDraft, forgetProfileDraft, profileHasDraft, serializeProfileOperation, saveModelVisibility, retryModelVisibility, visibilitySaveStates, intendedModelVisibility } from '../services/profileDrafts'
+import '../desktop-settings.css'
+import VocabularyDisplaySettings from '../components/VocabularyDisplaySettings.vue'
+import NamedModelKeys from '../components/NamedModelKeys.vue'
 import {
   Check,
   ChevronDown,
@@ -131,7 +137,12 @@ function toggleExpanded(id: number) {
 async function load() {
   try {
     const result = await get<AiProfile[]>('/ai/profiles')
-    profiles.value = result.map(profile => ({ ...profile, adapter: profile.adapter || 'openai-chat', reasoning_effort: profile.reasoning_effort || '', api_key: '' }))
+    profiles.value = result.map(profile => {
+      if (!profileDrafts[profile.id]) profileDrafts[profile.id] = { ...profile, adapter: profile.adapter || 'openai-chat', reasoning_effort: profile.reasoning_effort || '', api_key: '' }
+      else if (!profileHasDraft(profile.id)) Object.assign(profileDrafts[profile.id], profile, { api_key: '' })
+      else profileDrafts[profile.id].models = profile.models
+      return profileDrafts[profile.id]
+    })
     error.value = ''
   } catch (cause) {
     error.value = String(cause)
@@ -159,22 +170,16 @@ async function createProfile() {
 }
 
 async function saveProfile(profile: AiProfile) {
-  const key = busyKey('save', profile.id)
-  if (busy[key]) return
-  busy[key] = true
-  try {
-    await put(`/ai/profiles/${profile.id}`, payload(profile))
-    notices[profile.id] = '配置已保存'
-    message.value = ''
-    error.value = ''
-    await load()
-    expanded.value = expanded.value.filter(id => id !== profile.id)
-    signalChanged()
-  } catch (cause) {
-    error.value = String(cause)
-  } finally {
-    busy[key] = false
-  }
+  if (!saveProfileDraft(profile.id, payload(profile), true)) return false
+  return flushProfileDraft(profile.id)
+}
+function editProfile(profile: AiProfile, immediate = false) { saveProfileDraft(profile.id, payload(profile), immediate) }
+function chooseDefault(profile: AiProfile) {
+  // 页内立即翻转：不能只改其它配置，否则被点的那条要等下次进入页面才显示为默认。
+  profile.is_default = true
+  preferDefaultProfile(profile.id)
+  for (const other of profiles.value) if (other.id !== profile.id && other.is_default) { other.is_default = false; editProfile(other, true) }
+  editProfile(profile, true)
 }
 
 async function toggleProfile(profile: AiProfile) {
@@ -183,6 +188,7 @@ async function toggleProfile(profile: AiProfile) {
 }
 
 async function syncModels(profile: AiProfile) {
+  if (!await saveProfile(profile)) return
   const key = busyKey('sync', profile.id)
   if (busy[key]) return
   busy[key] = true
@@ -201,6 +207,7 @@ async function syncModels(profile: AiProfile) {
 }
 
 async function testProfile(profile: AiProfile) {
+  if (!await saveProfile(profile)) return
   const key = busyKey('test', profile.id)
   if (busy[key]) return
   busy[key] = true
@@ -219,33 +226,16 @@ async function testProfile(profile: AiProfile) {
 }
 
 async function setModelVisible(profile: AiProfile, model: AiModel) {
-  model.is_visible = !model.is_visible
-  try {
-    await put(`/ai/profiles/${profile.id}/models`, {
-      model_id: model.model_id,
-      is_visible: model.is_visible,
-    })
-    signalChanged()
-  } catch (cause) {
-    model.is_visible = !model.is_visible
-    error.value = String(cause)
-  }
+  await saveModelVisibility(profile.id, !intendedModelVisibility(profile.id, model), model.model_id)
 }
-
-async function setAllVisible(profile: AiProfile, visible: boolean) {
-  try {
-    await put(`/ai/profiles/${profile.id}/models/visibility`, { is_visible: visible })
-    profile.models.forEach(model => { model.is_visible = visible })
-    signalChanged()
-  } catch (cause) {
-    error.value = String(cause)
-  }
-}
+async function setAllVisible(profile: AiProfile, visible: boolean) { await saveModelVisibility(profile.id, visible) }
 
 async function removeProfile(profile: AiProfile) {
-  if (!window.confirm(`删除 API 配置“${profile.name}”？已保存的对话不会被删除。`)) return
+  if (!await confirmDesktop(`删除 API 配置“${profile.name}”？已保存的对话不会被删除。`)) return
   try {
-    await del(`/ai/profiles/${profile.id}`)
+    if (!await flushProfileDraft(profile.id)) return
+    await serializeProfileOperation(() => del(`/ai/profiles/${profile.id}`))
+    forgetProfileDraft(profile.id)
     message.value = `已删除“${profile.name}”`
     error.value = ''
     await load()
@@ -262,6 +252,16 @@ onMounted(() => {
 
 <template>
   <div class="page ai-settings-page">
+    <aside class="desktop-learning-settings"><h2>学习偏好</h2><VocabularyDisplaySettings /><VocabularyMaintenance />    <section class="settings-about card" aria-labelledby="settings-about-title">
+      <div class="settings-about-heading">
+        <span class="api-profile-icon"><BookOpen :size="20" /></span>
+        <div><h2 id="settings-about-title">帮助与关于</h2></div>
+      </div>
+      <div class="settings-about-actions">
+        <RouterLink class="button secondary" to="/help"><BookOpen :size="16" />使用帮助</RouterLink>
+        <a class="button ghost" href="https://api.xiaoheihe.cn/v3/bbs/app/api/web/share?h_camp=link&amp;h_src=YXBwX3NoYXJl&amp;link_id=0ad4723fda0b" target="_blank" rel="noopener noreferrer"><ExternalLink :size="16" />问题反馈</a>
+      </div>
+    </section></aside>
     <div class="page-head">
       <div>
         <h1>模型与 API</h1>
@@ -324,12 +324,12 @@ onMounted(() => {
           ><span /></button>
         </header>
 
-        <div v-if="expanded.includes(profile.id)" class="api-profile-body">
+        <div v-if="expanded.includes(profile.id)" class="api-profile-body" @input="editProfile(profile)" @change="editProfile(profile, true)" @focusout="flushProfileDraft(profile.id)">
           <div class="grid grid-2">
             <div class="field"><label>配置名称</label><input v-model.trim="profile.name"></div>
             <div class="field"><label>接口协议</label><select v-model="profile.adapter"><option v-for="adapter in adapters" :key="adapter.id" :value="adapter.id">{{ adapter.label }}</option></select><small>{{ adapterDefinition(profile).description }}</small></div>
           </div>
-          <div class="grid grid-2"><div class="field"><label>API Base URL</label><input v-model.trim="profile.base_url" :placeholder="adapterDefinition(profile).placeholder"><small>请求端点：{{ endpointPreview(profile) }}</small></div><div class="field"><label>API Key（留空不会清除）</label><div class="api-key-input"><KeyRound :size="17" /><input v-model="profile.api_key" type="password" :placeholder="profile.has_api_key ? '密钥已加密保存在本机' : '本地接口通常可留空'"></div></div></div>
+          <div class="grid grid-2"><div class="field"><label>API Base URL</label><input v-model.trim="profile.base_url" :placeholder="adapterDefinition(profile).placeholder"><small>请求端点：{{ endpointPreview(profile) }}</small></div><NamedModelKeys :profile="profile" @changed="signalChanged" /></div>
           <div class="field">
               <label>默认模型</label>
               <select v-model="profile.default_model">
@@ -347,14 +347,15 @@ onMounted(() => {
           <p class="field-hint">所有模型场景均由供应商决定最大输出长度；若长任务没有返回正文，程序会提示重试或切换模型/API 配置。</p>
           <div class="field"><label>附加系统提示词</label><textarea v-model="profile.system_prompt" rows="3" placeholder="对该 API 下的模型统一生效"></textarea></div>
           <label class="default-profile-check">
-            <input v-model="profile.is_default" type="checkbox" :disabled="profile.is_default">
+            <input v-model="profile.is_default" @change="chooseDefault(profile)" type="checkbox" :disabled="profile.is_default">
             设为默认 API（错题分析、单词翻译和题库校正会优先使用它）
           </label>
 
+          <p role="status">{{ profileSaveStates[profile.id] || '修改后自动保存' }}</p>
           <div class="api-actions">
             <button class="button" type="button" :disabled="busy[busyKey('save',profile.id)]" @click="saveProfile(profile)">
               <LoaderCircle v-if="busy[busyKey('save',profile.id)]" :size="16" class="spinning" />
-              <Save v-else :size="16" />保存配置
+              <Save v-else :size="16" />保存 / 重试
             </button>
             <button class="button secondary" type="button" :disabled="busy[busyKey('sync',profile.id)]" @click="syncModels(profile)">
               <RefreshCw :size="16" :class="{spinning:busy[busyKey('sync',profile.id)]}" />同步模型
@@ -369,6 +370,7 @@ onMounted(() => {
           <p v-if="notices[profile.id]" class="api-profile-notice" role="status">{{ notices[profile.id] }}</p>
 
           <section class="api-model-section">
+            <p v-if="visibilitySaveStates[profile.id]?.message" role="status">{{ visibilitySaveStates[profile.id]?.message }} <button v-if="visibilitySaveStates[profile.id]?.message.includes('失败')" @click="retryModelVisibility(profile.id)">重试</button></p>
             <div class="api-model-heading">
               <div><h3>模型选择器</h3><p>关闭“显示”后，该模型仍保留在配置中，但不会出现在助手的切换菜单里。</p></div>
               <div>
@@ -382,13 +384,13 @@ onMounted(() => {
                 <button
                   type="button"
                   role="switch"
-                  :aria-checked="model.is_visible"
+                  :aria-checked="intendedModelVisibility(profile.id,model)"
                   :disabled="!model.is_available"
-                  :class="{ active:model.is_visible }"
+                  :class="{ active:intendedModelVisibility(profile.id,model) }"
                   @click="setModelVisible(profile,model)"
                 >
-                  <Eye v-if="model.is_visible" :size="15" /><EyeOff v-else :size="15" />
-                  {{ model.is_visible ? '显示' : '隐藏' }}
+                  <Eye v-if="intendedModelVisibility(profile.id,model)" :size="15" /><EyeOff v-else :size="15" />
+                  {{ intendedModelVisibility(profile.id,model) ? '显示' : '隐藏' }}
                 </button>
               </div>
             </div>
@@ -398,15 +400,6 @@ onMounted(() => {
       </article>
     </div>
 
-    <section class="settings-about card" aria-labelledby="settings-about-title">
-      <div class="settings-about-heading">
-        <span class="api-profile-icon"><BookOpen :size="20" /></span>
-        <div><h2 id="settings-about-title">帮助与关于</h2></div>
-      </div>
-      <div class="settings-about-actions">
-        <RouterLink class="button secondary" to="/help"><BookOpen :size="16" />使用帮助</RouterLink>
-        <a class="button ghost" href="https://api.xiaoheihe.cn/v3/bbs/app/api/web/share?h_camp=link&amp;h_src=YXBwX3NoYXJl&amp;link_id=0ad4723fda0b" target="_blank" rel="noopener noreferrer"><ExternalLink :size="16" />问题反馈</a>
-      </div>
-    </section>
+
   </div>
 </template>

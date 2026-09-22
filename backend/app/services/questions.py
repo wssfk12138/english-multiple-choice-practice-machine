@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 import sqlite3
 from typing import Any
 from urllib.parse import quote
@@ -116,6 +117,7 @@ def serialize_unit(
     *,
     shuffle_options: bool,
     answer_orders: dict[int, list[str]] | None = None,
+    candidate_policy_version: int = 1,
     include_answers: bool = False,
     only_question_ids: set[int] | None = None,
 ) -> dict[str, Any]:
@@ -138,11 +140,24 @@ def serialize_unit(
     if only_question_ids is not None:
         question_rows = [row for row in question_rows if row["id"] in only_question_ids]
 
+    shared_data = parse_json(unit["shared_data"], {}) or {}
+    fixed_slots = shared_data.get("fixed_slots") or shared_data.get("fixedSlots") or []
+    directions = " ".join(str(value or "") for value in (
+        unit["passage"], shared_data.get("direction"), shared_data.get("directions"), shared_data.get("instructions")
+    ))
+    preserve_candidate_order = unit["unit_type"] == "part_b" and (
+        unit["subtype"] == "paragraph_reordering"
+        or (unit["subtype"] == "paragraph_insertion" and (
+            any(isinstance(slot, dict) and slot.get("type") == "fixed" for slot in fixed_slots)
+            or re.search(r"(?:has|have)\s+been\s+(?:correctly\s+)?placed", directions, re.I)
+        ))
+    )
     shared_part_b_order: list[str] | None = None
     if (
         unit["unit_type"] == "part_b"
         and question_rows
         and shuffle_options
+        and not preserve_candidate_order
         and not answer_orders
     ):
         option_rows = connection.execute(
@@ -156,14 +171,15 @@ def serialize_unit(
         serialize_question(
             connection,
             row,
-            shuffle=shuffle_options and shared_part_b_order is None,
+            shuffle=shuffle_options and shared_part_b_order is None and not preserve_candidate_order,
             option_order=(answer_orders or {}).get(row["id"]) or shared_part_b_order,
             include_answer=include_answers,
-            preserve_option_labels=unit["subtype"] == "true_false",
+            preserve_option_labels=unit["subtype"] == "true_false" or (
+                preserve_candidate_order and (candidate_policy_version >= 1 or not (answer_orders or {}).get(row["id"]))
+            ),
         )
         for row in question_rows
     ]
-    shared_data = parse_json(unit["shared_data"], {}) or {}
     if unit["unit_type"] == "listening":
         shared_data["audio_tracks"] = _audio_tracks(shared_data)
     return {

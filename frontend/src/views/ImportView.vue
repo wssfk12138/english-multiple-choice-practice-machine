@@ -36,6 +36,7 @@ type QuestionLabel = {
   number: number
   year: number
   unit_title: string
+  content_review_required?: boolean | number
   primary_skill: string
   secondary_skills: string[]
   trap_types: string[]
@@ -737,7 +738,7 @@ async function exportEsq(includeLabels = false) {
         <div v-if="labelRows.length" class="question-label-list">
           <button v-for="row in labelRows" :key="row.question_id" type="button" class="question-label-row" :class="{ unlabeled: !row.primary_skill }" @click="editLabel(row)">
             <span><strong>{{ row.year }} 年 · {{ row.unit_title }}</strong><small>第 {{ row.number }} 题</small></span>
-            <span>{{ row.primary_skill || '尚未标注' }}</span>
+            <span>{{ row.primary_skill || '尚未标注' }}{{ row.content_review_required ? ' · 题面已修正，标签待复核' : '' }}</span>
             <span class="question-label-state"><Lock v-if="row.locked" :size="13" />{{ row.locked ? '已锁定' : '可更新' }}</span>
           </button>
         </div>

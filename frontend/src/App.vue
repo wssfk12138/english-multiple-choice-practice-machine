@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import DesktopConfirm from './components/DesktopConfirm.vue'
 import { BookMarked, BookOpenText, Brain, CircleHelp, CloudDownload, FileUp, Home, Library, MessageCircle, Moon, RefreshCw, Settings, Sun } from 'lucide-vue-next'
 import { onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
@@ -23,6 +24,7 @@ onMounted(() => {
 </script>
 
 <template>
+  <DesktopConfirm />
   <div
     class="app-shell"
     :class="{ 'practice-shell': route.path.startsWith('/practice') }"

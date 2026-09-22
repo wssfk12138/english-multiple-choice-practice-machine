@@ -222,7 +222,18 @@ def _question_hash(
         },
         "answer": answer,
     }
-    payload = json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    def normalize_json_numbers(value: Any) -> Any:
+        # Match JSON.stringify and the other platforms: 1.0 and 1 are
+        # the same ESQ number, including nested answer/option metadata.
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        if isinstance(value, list):
+            return [normalize_json_numbers(item) for item in value]
+        if isinstance(value, dict):
+            return {key: normalize_json_numbers(item) for key, item in value.items()}
+        return value
+
+    payload = json.dumps(normalize_json_numbers(canonical), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 
 
@@ -432,6 +443,26 @@ def _validate_paper(
                 if isinstance(label, dict):
                     label["questionContentHash"] = label.get("questionContentHash", "")
         unit["questions"] = normalized_questions
+        if 'fixed_slots' in unit or 'fixedSlots' in unit:
+            slots = unit.get('fixed_slots', unit.get('fixedSlots'))
+            numbers = [q['number'] for q in normalized_questions]
+            valid = isinstance(slots, list)
+            seen_questions, seen_fixed = [], []
+            for slot in slots if isinstance(slots, list) else []:
+                if not isinstance(slot, dict):
+                    valid = False
+                elif slot.get('type') == 'question' and type(slot.get('number')) is int and slot['number'] in numbers:
+                    seen_questions.append(slot['number'])
+                elif slot.get('type') == 'fixed' and slot.get('label') in candidate_keys:
+                    seen_fixed.append(slot['label'])
+                else:
+                    valid = False
+            if slots and (sorted(seen_questions) != sorted(numbers) or len(set(seen_fixed)) != len(seen_fixed)):
+                valid = False
+            if not valid:
+                _error(details, f'{path}.fixed_slots', '固定段位置必须包含每道题且不重复，固定字母必须对应候选')
+            else:
+                unit['fixed_slots'] = slots
         normalized_units.append(unit)
     return {
         **paper,
@@ -716,6 +747,10 @@ def publish_package(
     profile_id: int = 1,
 ) -> dict[str, Any]:
     extracted_assets = _extract_assets(package, archive_path)
+    from .content_remediation import validate_remediated_import, bundled_manifest
+    content_manifest = bundled_manifest()
+    for paper in package['papers']:
+        validate_remediated_import(paper, content_manifest)
     manifest = package["manifest"]
     package_id = manifest["packageId"]
     content_version = manifest["contentVersion"]
@@ -809,6 +844,13 @@ def publish_package(
                 "content_package_id": package_id,
                 "content_version": content_version,
             }
+            previous_shared = json.loads(unit_row['shared_data'] or '{}') if unit_row else {}
+            if 'label_review_versions' in previous_shared:
+                shared_data['label_review_versions'] = previous_shared['label_review_versions']
+            if content_manifest and any(c['unitKey'] == unit_key for c in content_manifest['units']):
+                shared_data['content_revision'] = content_manifest['revision']
+            if 'fixed_slots' in unit or 'fixedSlots' in unit:
+                shared_data['fixed_slots'] = unit.get('fixed_slots', unit.get('fixedSlots'))
             if unit_row:
                 unit_id = unit_row["id"]
                 connection.execute(
@@ -1204,6 +1246,8 @@ def export_package(
                 shared = {}
             if shared.get("directions"):
                 unit_data["instructions"] = shared["directions"]
+            if 'fixed_slots' in shared or 'fixedSlots' in shared:
+                unit_data['fixed_slots'] = shared.get('fixed_slots', shared.get('fixedSlots'))
             candidates = shared.get("candidates")
             if isinstance(candidates, dict):
                 unit_data["candidates"] = [

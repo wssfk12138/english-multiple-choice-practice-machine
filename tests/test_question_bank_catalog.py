@@ -30,6 +30,16 @@ class Response(BytesIO):
 
 
 class QuestionBankCatalogTests(unittest.TestCase):
+    def test_domain_prefixes_are_not_private_ipv6(self):
+        for host in ("fcdn.example.com", "fdomain.example", "feather.example", "fe80.example",
+                     "fe90.example", "fea0.example", "feb0.example", "[2606:4700:4700::1111]"):
+            url = f"https://{host}/bank.esq"
+            with self.subTest(host=host):
+                self.assertEqual(validate_remote_url(url), url)
+        for host in ("[::]", "[::1]", "[fc00::1]", "[fd12::1]", "[fe80::1]", "[febf::1]"):
+            with self.subTest(host=host), self.assertRaises(QuestionBankCatalogError):
+                validate_remote_url(f"https://{host}/bank.esq")
+
     def package(self, **overrides):
         value = {
             "packageId": "cet4-2026", "title": "CET4 2026",

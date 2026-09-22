@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import socket
 import threading
+from contextlib import closing
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -14,8 +15,9 @@ from .routers.sync import public_router
 from .schemas import LAN_SYNC_MAX_REQUEST_BYTES
 from .services.sync import sync_enabled
 
+from .config import LAN_SYNC_PORT
+
 LAN_SYNC_HOST = "0.0.0.0"
-LAN_SYNC_PORT = 8766
 
 
 class RequestBodyLimitMiddleware:
@@ -65,7 +67,9 @@ class RequestBodyLimitMiddleware:
         async def replay_body() -> dict[str, Any]:
             nonlocal delivered
             if delivered:
-                return {"type": "http.request", "body": b"", "more_body": False}
+                # StreamingResponse waits here for a real disconnect after consuming the body.
+                # https://asgi.readthedocs.io/en/latest/specs/www.html#disconnect-receive-event
+                return await receive()
             delivered = True
             return {"type": "http.request", "body": bytes(body), "more_body": False}
 
@@ -105,7 +109,8 @@ def start_lan_sync_host() -> bool:
         except OSError:
             listener.close()
             return False
-        config = uvicorn.Config(lan_sync_app, host=LAN_SYNC_HOST, port=LAN_SYNC_PORT, log_level="warning")
+        config = uvicorn.Config(lan_sync_app, host=LAN_SYNC_HOST, port=LAN_SYNC_PORT,
+                                log_level="warning", proxy_headers=False, access_log=False)
         server = uvicorn.Server(config)
         thread = threading.Thread(
             target=_run_server,
@@ -135,11 +140,18 @@ def _run_server(server: uvicorn.Server, listener: socket.socket) -> None:
 
 def start_lan_sync_host_if_enabled() -> bool:
     initialize_database()
-    with connect() as connection:
-        return start_lan_sync_host() if sync_enabled(connection) else False
+    with closing(connect()) as connection:
+        if not sync_enabled(connection):
+            return False
+        from .lan_tls_host import start_tls_host
+        started = start_lan_sync_host()
+        start_tls_host()
+        return started
 
 
 def stop_lan_sync_host(timeout: float = 5.0) -> bool:
+    from .lan_tls_host import stop_tls_host
+    stop_tls_host(timeout)
     with _lock:
         server = _server
         thread = _thread

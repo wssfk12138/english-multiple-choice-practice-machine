@@ -14,6 +14,7 @@ from lxml import etree
 from pypdf import PdfReader
 
 from .passage_cleanup import repair_inline_blank_paragraph_breaks
+from .docx_numbering import numbered_paragraph_labels
 
 
 NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
@@ -153,7 +154,7 @@ def _ensure_numbered_blanks(passage: str, numbers: range) -> str:
     cursor = 0
     for number in numbers:
         pattern = re.compile(
-            rf"(?<![\d_])(?:\(\s*)?{number}(?:\s*\))?(?:\s*_{2,})?(?![\d_])"
+            rf"(?<![\w{{])(?:\(\s*{number}\s*\)|{number})(?:[ \t]*_{{2,}})?(?![\w}}%％]|[.,]\d)"
         )
         match = pattern.search(passage, cursor)
         if not match:
@@ -166,39 +167,7 @@ def _ensure_numbered_blanks(passage: str, numbers: range) -> str:
         passage = passage[: match.start()] + replacement + passage[end:]
         cursor = match.start() + len(replacement)
 
-    present = {
-        int(number)
-        for number in re.findall(r"(?<!\d)([1-4]?\d)\s+_{2,}", passage)
-    }
-    missing = [number for number in expected if number not in present]
-    for number in missing:
-        previous = max((value for value in present if value < number), default=None)
-        following = min((value for value in present if value > number), default=None)
-        if previous is None or following is None:
-            continue
-        previous_match = re.search(
-            rf"(?<!\d){previous}\s+_{{2,}}",
-            passage,
-        )
-        following_match = re.search(
-            rf"(?<!\d){following}\s+_{{2,}}",
-            passage,
-            re.S,
-        )
-        if not previous_match or not following_match:
-            continue
-        gap_start = previous_match.end()
-        gap_end = following_match.start()
-        gap = passage[gap_start:gap_end]
-        # Broken text frames occasionally drop the placeholder at a hard line
-        # boundary, leaving fragments such as "barrier that\n\nPavlopetri".
-        boundary = re.search(r"(?<=[A-Za-z])\n\n(?=[A-Za-z])", gap)
-        if not boundary:
-            continue
-        insertion = gap_start + boundary.start()
-        replacement = f" {number} ______ "
-        passage = passage[:insertion] + replacement + passage[insertion + 2 :]
-        present.add(number)
+    # Paragraph breaks alone cannot establish a missing blank.
     return passage
 
 
@@ -262,9 +231,14 @@ def extract_blocks(path: Path) -> tuple[list[str], str, Path | None]:
 
     with zipfile.ZipFile(parse_path) as archive:
         root = etree.fromstring(archive.read("word/document.xml"))
+        numbering = etree.fromstring(archive.read("word/numbering.xml")) if "word/numbering.xml" in archive.namelist() else None
+    labels = numbered_paragraph_labels(root, numbering)
     blocks: list[str] = []
     for child in root.xpath("./w:body/*", namespaces=NS):
-        text = _extract_ooxml_text(child)
+        text = (
+            "\n".join(labels.get(p, "") + _extract_ooxml_text(p) for p in child.xpath(".//w:p", namespaces=NS))
+            if child.tag == "{" + NS["w"] + "}tbl" else labels.get(child, "") + _extract_ooxml_text(child)
+        )
         text = clean_text(text)
         if text:
             blocks.append(text)
@@ -360,7 +334,7 @@ def _split_option_text(text: str) -> list[tuple[str, str]]:
     normalized = clean_text(text)
     # OCR frequently turns "[A]" into "A." or joins all options into one paragraph.
     matches = list(OPTION_MARK_RE.finditer(normalized))
-    if len(matches) < 2:
+    if not matches or (len(matches) == 1 and matches[0].start() != 0):
         return []
     options: list[tuple[str, str]] = []
     for index, match in enumerate(matches):
@@ -822,26 +796,11 @@ def _labeled_question_groups(segment: list[str], first_number: int) -> tuple[str
             current["options"].extend(
                 {"key": label, "content": content} for label, content in options
             )
-        elif current and re.match(r"^\s*\[?[A-D]\]?", text, re.I):
-            label_match = re.match(
-                r"^\s*(?:\[|\(|（|【)?([A-D])(?:\]|\)|）|】|[\.．、])?\s*(.*)$",
-                text,
-                re.I | re.S,
-            )
-            if label_match:
-                current["options"].append(
-                    {
-                        "key": label_match.group(1).upper(),
-                        "content": clean_text(label_match.group(2)),
-                    }
-                )
-        elif current and len(current["options"]) < 4 and question_started:
-            current["options"].append(
-                {
-                    "key": chr(ord("A") + len(current["options"])),
-                    "content": text,
-                }
-            )
+        elif current:
+            if not current["options"]:
+                current["stem"] = clean_text(current["stem"] + " " + text)
+            else:
+                current["options"][-1]["content"] = clean_text(current["options"][-1]["content"] + " " + text)
         elif not question_started:
             passage_parts.append(text)
     if current:
@@ -852,11 +811,20 @@ def _labeled_question_groups(segment: list[str], first_number: int) -> tuple[str
 def _unlabeled_question_groups(
     segment: list[str], first_number: int
 ) -> tuple[str, list[dict]]:
-    clean = [text for text in segment if not _is_noise(text)]
+    clean: list[str] = []
+    for text in segment:
+        if _is_noise(text):
+            continue
+        if clean and re.fullmatch(r"[.．?？]+", text.strip()):
+            clean[-1] += text.strip()
+        else:
+            clean.append(text)
     # Modern OCR exports produce exactly five stems followed by four bare options each.
     if len(clean) < 25:
         return "\n\n".join(clean), []
     tail = clean[-25:]
+    if any(len(re.findall(r"[A-Za-z]+", tail[i])) < 3 or not re.search(r"[.．?？_]$", tail[i]) for i in (0, 5, 10, 15, 20)):
+        return "\n\n".join(clean), []
     questions = []
     for index in range(5):
         offset = index * 5
@@ -884,7 +852,7 @@ def _parse_reading(blocks: list[str], answers: dict[int, str]) -> list[dict[str,
         for index, text in enumerate(blocks)
         if (match := TEXT_MARK_RE.match(text))
     ]
-    part_b = _find_index(blocks, r"^\s*Part\s*B\s*$")
+    part_b = _find_index(blocks, r"^\s*Part\s*B(?:\s+Directions[:：]?)?\s*$")
     units = []
     for marker_index, text_number in markers[:4]:
         following = [
@@ -894,7 +862,7 @@ def _parse_reading(blocks: list[str], answers: dict[int, str]) -> list[dict[str,
         segment = blocks[marker_index + 1:end]
         first_number = 21 + (text_number - 1) * 5
         passage, questions = _labeled_question_groups(segment, first_number)
-        if len(questions) != 5 or any(len(question["options"]) != 4 for question in questions):
+        if not questions:
             passage, questions = _unlabeled_question_groups(segment, first_number)
         for question in questions:
             question["answer"] = answers.get(question["number"], "")
@@ -1404,7 +1372,7 @@ def _reading_part_b_bounds(blocks: list[str]) -> tuple[int, int]:
     )
     if reading < 0:
         reading = _find_index(blocks, r"Reading\s+Comprehension")
-    part_b = _find_index(blocks, r"^\s*Part\s*B\s*$", max(reading, 0))
+    part_b = _find_index(blocks, r"^\s*Part\s*B(?:\s+Directions[:：]?)?\s*$", max(reading, 0))
     section_three = _find_index(
         blocks,
         r"^\s*Section\s*(?:III|Ⅲ|3)\s*(?:Translation)?\s*$",
@@ -1490,86 +1458,52 @@ def _parse_part_b(blocks: list[str], answers: dict[int, str]) -> dict[str, Any]:
                 section_end,
             )
 
-    direction_index = next(
-        (
-            index
-            for index, text in enumerate(blocks)
-            if re.search(r"(?:for\s+)?questions?.*?41.*?45", text, re.I)
-            and (
-                re.search(r"list\s+A", text, re.I)
-                or re.search(r"list\s+A", " ".join(blocks[index : index + 2]), re.I)
-                or "numbered" in text.lower()
-            )
-        ),
-        -1,
-    )
-    if direction_index < 0:
-        direction_index = next(
-            (
-                index
-                for index, text in enumerate(blocks)
-                if re.search(r"numbered\s+(?:name|person|paragraph)", text, re.I)
-                and re.search(r"list\s+A", text, re.I)
-            ),
-            -1,
-        )
-    reading_part_b = direction_index
-    part_c_candidates = [
-        index
-        for index in range(max(reading_part_b, 0) + 1, len(blocks))
-        if re.match(r"^\s*Part\s*C(?:\s+Directions:)?\s*$", blocks[index], re.I)
-        or re.search(r"→\s*Part\s*C\s*$", blocks[index], re.I)
-    ]
-    part_c = part_c_candidates[0] if part_c_candidates else -1
-    section = (
-        blocks[reading_part_b:part_c]
-        if reading_part_b >= 0 and part_c > reading_part_b
-        else []
-    )
+    start = part_b + 1 if part_b >= 0 else next((i for i, text in enumerate(blocks) if re.search(r"questions?.*41.*45", text, re.I)), 0)
+    ends = [i for i in range(start, len(blocks)) if re.match(r"^\s*Part\s*C(?:\s+Directions:)?\s*$", blocks[i], re.I)]
+    if section_end >= start:
+        ends.append(section_end)
+    section = [clean_text(line) for block in blocks[start:min(ends) if ends else len(blocks)] for line in block.splitlines() if clean_text(line)]
     direction_parts: list[str] = []
-    for text in section[:3]:
-        if not direction_parts or re.search(
-            r"list\s+A|numbered|extra choices|fit in|coherent text|ANSWER SHEET",
-            text,
-            re.I,
-        ):
+    for text in section:
+        if re.match(r"^Directions[:：]?$", text, re.I) or re.search(r"questions?.*41.*45|list\s+A|numbered|extra choices|wrong order|reorganize|subheading|ANSWER SHEET", text, re.I):
             direction_parts.append(text)
         else:
             break
     direction = clean_text(" ".join(direction_parts))
+    subtype = "opinion_matching" if re.search(r"left column.*right column", direction, re.I) else _part_b_subtype(direction)
     candidate_map: dict[str, str] = {}
     material: list[str] = []
-    for text in section[len(direction_parts) :]:
-        if _is_noise(text) or text == direction:
+    candidate = ""
+    names: dict[int, str] = {}
+    for text in section[len(direction_parts):]:
+        if re.match(r"^\s*(?:46[.．]\s*)?Directions[:：]", text, re.I):
+            break
+        name = re.match(r"^\s*(4[1-5])[.．)]\s*(.+)$", text)
+        if subtype == "opinion_matching" and name:
+            names[int(name[1])] = clean_text(name[2])
+            candidate = ""
             continue
-        match = re.match(r"^\s*\[([A-O])\]\s*(.*)$", text, re.I | re.S)
+        if _is_noise(text):
+            continue
+        match = re.match(r"^\s*(?:\[([A-H])\]|([A-H])[.．、)])\s*(.*)$", text, re.I | re.S)
         if match:
-            candidate_map[match.group(1).upper()] = clean_text(match.group(2))
+            candidate = (match[1] or match[2]).upper()
+            candidate_map[candidate] = clean_text(match[3])
         else:
-            material.append(text)
-
-    subtype = _part_b_subtype(direction)
-    if not candidate_map:
-        usable = [
-            text
-            for text in material
-            if not PAGE_FOOTER_RE.search(text)
-            and not re.search(r"(?:41\.){2}|→|ANSWER SHEET", text, re.I)
-        ]
-        candidate_count = _part_b_candidate_count(direction, subtype)
-        if len(usable) >= candidate_count:
-            inferred = usable[-candidate_count:]
-            candidate_map = {
-                chr(ord("A") + index): text for index, text in enumerate(inferred)
-            }
-            material = material[: len(material) - candidate_count]
+            if re.match(r"^\s*(?:\(?4[1-5]\)?[.．_]|\{\{blank:)", text):
+                candidate = ""
+            if candidate and (subtype != "heading_matching" or len(candidate_map) < 7):
+                candidate_map[candidate] = clean_text(candidate_map[candidate] + " " + text)
+            else:
+                material.append(text)
+    # Missing labels remain incomplete and cannot be published without correction.
 
     questions = []
     for number in range(41, 46):
         questions.append(
             {
                 "number": number,
-                "stem": f"位置 {number}",
+                "stem": names.get(number, f"位置 {number}"),
                 "options": [
                     {"key": key, "content": value}
                     for key, value in sorted(candidate_map.items())
@@ -1594,7 +1528,7 @@ def _parse_part_b(blocks: list[str], answers: dict[int, str]) -> dict[str, Any]:
 
 def _has_objective_part_b(blocks: list[str]) -> bool:
     for index, text in enumerate(blocks):
-        if not re.match(r"^\s*Part\s*B\s*$", text, re.I):
+        if not re.match(r"^\s*Part\s*B(?:\s+Directions[:：]?)?\s*$", text, re.I):
             continue
         context = " ".join(blocks[index : index + 5]).lower()
         if re.search(r"translate\s+the\s+underlined|translation", context):
@@ -1730,7 +1664,17 @@ def validate_draft(draft: dict[str, Any]) -> list[str]:
         ):
             warnings.append("Part B 标准答案未能对应候选项")
     for unit in units:
+        if unit["unit_type"] == "cloze":
+            blanks = [int(a or b) for a, b in re.findall(r"\{\{blank:(\d+)\}\}|(?<![\w])([1-9]|1\d|20)\s*_{2,}", unit.get("passage", ""))]
+            expected = [int(q["number"]) for q in unit["questions"]]
+            if len(blanks) != len(expected) or any(blanks.count(n) != 1 for n in expected):
+                warnings.append("完型空位缺失或重复，请对照原文校对")
         for question in unit["questions"]:
+            options = question.get("options", [])
+            if len({o.get("key") for o in options}) != len(options) or any(not clean_text(o.get("content", "")) or re.fullmatch(r"\d+[.．]?", clean_text(o.get("content", ""))) for o in options):
+                warnings.append(f"第{question['number']}题选项为空、重复或混入题号")
+            if unit["unit_type"] == "reading" and len(re.findall(r"[A-Za-z]+", question.get("stem", ""))) < 3:
+                warnings.append(f"第{question['number']}题题干疑似截断，请校对")
             if not question.get("answer"):
                 warnings.append(f"第{question['number']}题没有答案")
             elif question["answer"] not in {
