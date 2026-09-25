@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ClipboardCopy, Download, Trash2 } from 'lucide-vue-next'
 import { ref } from 'vue'
+import { confirmDialog } from '../platform/dialogs'
 import {
   clearDiagnosticEntries,
   copyText,
@@ -25,8 +26,9 @@ function exportDiagnostics() {
   notice.value = count ? `已导出 ${count} 条脱敏诊断` : '暂无可导出的诊断'
 }
 
-function clearDiagnostics() {
-  if (!diagnostics.value.length || !confirm('确认清空全部本地诊断吗？')) return
+async function clearDiagnostics() {
+  if (!diagnostics.value.length) return
+  if (!await confirmDialog({ title: '清空本地诊断', message: '确认清空全部本地诊断吗？清空后不可恢复。', confirmLabel: '清空', danger: true })) return
   clearDiagnosticEntries()
   diagnostics.value = []
   notice.value = '本地诊断已清空'

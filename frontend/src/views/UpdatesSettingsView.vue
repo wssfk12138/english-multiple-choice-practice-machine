@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Download, FolderOpen, PackageCheck, RefreshCw, ShieldCheck } from 'lucide-vue-next'
 import { onMounted, ref } from 'vue'
+import { confirmDialog } from '../platform/dialogs'
 import { get, post } from '../api'
 
 type UpdateStatus = {
@@ -89,7 +90,7 @@ async function downloadUpdate() {
 }
 
 async function openUpdate() {
-  if (!downloaded.value || !confirm('将打开已校验的安装包，是否继续？')) return
+  if (!downloaded.value || !await confirmDialog({ title: '打开已校验安装包', message: '将打开已校验的安装包。安装过程中程序可能需要关闭，是否继续？', confirmLabel: '打开' })) return
   busy.value = 'open'
   error.value = ''
   try {

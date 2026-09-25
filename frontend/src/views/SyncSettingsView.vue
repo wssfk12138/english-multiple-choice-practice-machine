@@ -3,6 +3,7 @@ import LanQuestionBankSharing from '../components/LanQuestionBankSharing.vue'
 import LanPairedDevices from '../components/LanPairedDevices.vue'
 import { ClipboardCopy, RefreshCw, Server } from 'lucide-vue-next'
 import { nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { confirmDialog } from '../platform/dialogs'
 import QRCode from 'qrcode'
 import { get, post } from '../api'
 
@@ -107,7 +108,7 @@ watch(() => [lanSync.host_urls.slice(), lanSync.passcode, lanSync.enabled, lanSy
 }, { deep: true })
 
 async function disableLanSync() {
-  if (!confirm('关闭局域网同步主机？已签发的同步会话将立即失效。')) return
+  if (!await confirmDialog({ title: '关闭局域网同步', message: '关闭局域网同步主机？已签发的同步会话将立即失效。', confirmLabel: '关闭', danger: true })) return
   busy.value = 'disable-lan'
   error.value = ''
   try {
@@ -123,7 +124,8 @@ async function disableLanSync() {
 }
 
 async function revokePairedDevices() {
-  if (!lanSync.paired_devices || !confirm(`将解除全部 ${lanSync.paired_devices} 台已配对设备？`)) return
+  if (!lanSync.paired_devices) return
+  if (!await confirmDialog({ title: '解除设备配对', message: `将解除全部 ${lanSync.paired_devices} 台已配对设备？解除后每台设备都需重新输入当前口令才能同步。`, confirmLabel: '解除', danger: true })) return
   busy.value = 'revoke'
   error.value = ''
   try {
