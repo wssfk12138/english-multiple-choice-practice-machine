@@ -17,9 +17,10 @@ import {
   Sparkles,
   Trash2,
 } from 'lucide-vue-next'
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, del, get, patch, post, put } from '../api'
+import { confirmDialog, promptDialog } from '../platform/dialogs'
 import QuestionBankSwitcher from '../components/QuestionBankSwitcher.vue'
 import { loadQuestionBankProfiles, questionBankProfilesState } from '../services/questionBankProfiles'
 import {
@@ -69,6 +70,10 @@ const selectorModels = ref<any[]>([])
 const selectedModelKey = ref('')
 const bulkAnswers = ref<Record<string, string>>({})
 const busy = ref(false)
+const publishStage = ref('')
+const publishSeconds = ref(0)
+let publishTimer: ReturnType<typeof setInterval> | undefined
+let uploadTimer: number | undefined
 const uploadStage = ref('')
 const uploadElapsedSeconds = ref(0)
 const error = ref('')
@@ -103,6 +108,8 @@ const labelPromptBusy = ref(false)
 const labelPromptError = ref('')
 const labelLaterButton = ref<HTMLButtonElement | null>(null)
 const targetProfileId = ref(0)
+const esqDestinationName = computed(() => questionBankProfilesState.items.find(profile => Number(profile.id) === Number(esqCurrent.value?.profile_id))?.name || '未识别题库')
+const draftReadOnly = computed(() => busy.value || current.value?.status === 'published')
 const answerUnits = computed(() => current.value?.draft?.units || [])
 const answerProgress = computed(() => {
   const questions = answerUnits.value.flatMap((unit: any) => unit.questions || [])
@@ -132,6 +139,7 @@ function selectedLabelScope(): LabelScope {
 
 function labelScopeQuery(scope: LabelScope) {
   const query = new URLSearchParams()
+  if (scope.questionBankProfileId > 0) query.set('question_bank_profile_id', String(scope.questionBankProfileId))
   if (scope.year !== null) query.set('year', String(scope.year))
   if (scope.paperIds.length) query.set('paper_ids', scope.paperIds.join(','))
   return query
@@ -188,7 +196,7 @@ async function beginPromptedLabeling() {
   if (!scope) return
   if (!labelPromptHasModel.value) {
     labelPromptOpen.value = false
-    await router.push('/settings')
+    await router.push('/settings/model')
     return
   }
   if (!labelPromptStatus.value?.remaining && !overwriteUnlocked.value) {
@@ -297,6 +305,14 @@ onMounted(async () => {
 })
 
 async function handleProfileChanged() {
+  labelManagerOpen.value = false
+  editingLabel.value = null
+  labelRows.value = []
+  if (!questionLabelingState.isRunning && !questionLabelingState.isPausing) {
+    importLabelScope.value = null
+    labelScopeMode.value = 'all'
+    await loadSelectedLabelStatus()
+  }
   targetProfileId.value = questionBankProfilesState.activeId
   current.value = null
   esqCurrent.value = null
@@ -351,12 +367,12 @@ async function confirmImportDestination() {
 function upload() { chooseImportDestination('document') }
 
 async function performDocumentUpload(profileId: number) {
-  if (!selectedFile.value) return
+  if (busy.value || !selectedFile.value) return
   importConfirmOpen.value = false
   busy.value = true; error.value = ''; notice.value = ''
   uploadStage.value = '正在上传并解析 Word 与答案附件'
   uploadElapsedSeconds.value = 0
-  const uploadTimer = window.setInterval(() => { uploadElapsedSeconds.value += 1 }, 1000)
+  uploadTimer = window.setInterval(() => { uploadElapsedSeconds.value += 1 }, 1000)
   const form = new FormData(); form.append('file', selectedFile.value)
   form.append('profile_id', String(profileId))
   selectedAnswerFiles.value.forEach(file => form.append('answer_files', file))
@@ -451,15 +467,43 @@ async function retryAssist() {
 }
 
 async function openJob(id: number) {
-  esqCurrent.value = null
-  current.value = await get(`/imports/${id}`)
-  current.value.draft = current.value.draft_data
-  bulkAnswers.value = {}
+  if (busy.value) return
+  try {
+    const job: any = await get(`/imports/${id}`)
+    esqCurrent.value = null
+    current.value = { ...job, draft: job.draft_data }
+    bulkAnswers.value = {}
+    aiSuggestion.value = null
+  } catch (cause) { error.value = String(cause) }
+}
+
+// The caller holds busy while saving and performing any following action.
+async function persistDraft(job: any) {
+  const result: any = await put(`/imports/${job.id}`, { draft_data: job.draft, reason: '用户编辑' })
+  if (!result?.draft) throw new Error('保存草稿失败：服务器未返回校验后的草稿')
+  job.draft = result.draft
+  job.warnings = result.warnings || result.draft.warnings || []
 }
 
 async function saveDraft() {
-  const result: any = await put(`/imports/${current.value.id}`, { draft_data: current.value.draft, reason: '用户编辑' })
-  current.value.draft = result.draft; notice.value = '草稿已保存'
+  if (!current.value?.draft || draftReadOnly.value) return
+  busy.value = true; error.value = ''
+  try {
+    await persistDraft(current.value)
+    notice.value = '草稿已保存'
+  } catch (cause) { error.value = String(cause) }
+  finally { busy.value = false }
+}
+
+function updateDraftJson(value: string) {
+  try {
+    const draft = JSON.parse(value)
+    if (!draft || typeof draft !== 'object' || !Array.isArray(draft.units) || !draft.answers || typeof draft.answers !== 'object') {
+      throw new Error('草稿需要 units 数组和 answers 对象')
+    }
+    current.value.draft = draft
+    error.value = ''
+  } catch (cause) { error.value = `JSON 草稿无效，已保留原草稿：${String(cause)}` }
 }
 
 function setAnswer(question: any, answer: string) {
@@ -521,9 +565,10 @@ function applyBulkAnswers(unit: any) {
 }
 
 async function saveAnswers() {
-  if (!current.value?.draft) return
+  if (!current.value?.draft || draftReadOnly.value) return
   busy.value = true; error.value = ''
   try {
+    await persistDraft(current.value)
     const result: any = await patch(`/imports/${current.value.id}/answers`, {
       answers: current.value.draft.answers || {},
       reason: '答案校对面板人工录入',
@@ -535,54 +580,85 @@ async function saveAnswers() {
 }
 
 async function askAi() {
-  busy.value = true
+  if (!current.value?.draft || draftReadOnly.value) return
+  busy.value = true; error.value = ''
   try {
+    await persistDraft(current.value)
     aiSuggestion.value = await post(`/ai/imports/${current.value.id}/suggest-correction`, { scope: 'all', instructions: aiInstructions.value })
   } catch (e) { error.value = String(e) } finally { busy.value = false }
 }
 
 async function acceptAi() {
-  if (aiSuggestion.value.requires_answer_confirmation) {
-    const changes = aiSuggestion.value.answer_changes
-      .map((change: any) => `第${change.number}题：${change.old} → ${change.new}`)
-      .join('\n')
-    const typed = prompt(`模型建议修改标准答案：\n${changes}\n\n答案修改会影响判分。若已逐项核对，请输入“确认修改答案”：`)
-    if (typed !== '确认修改答案') return
-  }
-  current.value.draft = aiSuggestion.value.suggested_draft
-  await saveDraft(); aiSuggestion.value = null
+  if (!aiSuggestion.value || draftReadOnly.value) return
+  busy.value = true; error.value = ''
+  try {
+    if (aiSuggestion.value.requires_answer_confirmation) {
+      const changes = aiSuggestion.value.answer_changes
+        .map((change: any) => `第${change.number}题：${change.old} → ${change.new}`)
+      const typed = await promptDialog({
+        title: '确认修改标准答案',
+        message: [...changes, '答案修改会影响判分。逐项核对后，请输入“确认修改答案”。'],
+        confirmLabel: '应用并保存', input: { label: '确认文字', required: true },
+      })
+      if (typed !== '确认修改答案') return
+    }
+    current.value.draft = aiSuggestion.value.suggested_draft
+    await persistDraft(current.value)
+    aiSuggestion.value = null
+    notice.value = '校正建议已保存到草稿'
+  } catch (cause) { error.value = String(cause) }
+  finally { busy.value = false }
 }
 
+function beginPublishProgress(stage: string) {
+  publishStage.value = stage
+  publishSeconds.value = 0
+  clearInterval(publishTimer)
+  publishTimer = setInterval(() => { publishSeconds.value += 1 }, 1000)
+}
+function endPublishProgress() {
+  clearInterval(publishTimer)
+  publishStage.value = ''
+}
+onUnmounted(() => { clearInterval(uploadTimer); clearInterval(publishTimer) })
+
 async function publish() {
-  busy.value = true
-  error.value = ''
+  if (!current.value?.draft || draftReadOnly.value) return
+  const job = current.value
+  busy.value = true; error.value = ''
   try {
-    if (current.value.draft.warnings?.length) return
-    if (!confirm(`确认发布 ${current.value.draft.year} 年题库吗？发布后模型不能直接修改正式题库。`)) return
-    const result: any = await post(`/imports/${current.value.id}/publish`)
+    await persistDraft(job)
+    if (job.draft.warnings?.length || job.warnings?.length) {
+      error.value = '草稿已保存，请先处理校验问题后再批准入库。'
+      return
+    }
+    if (!await confirmDialog({
+      title: '批准题库入库',
+      message: `确认发布 ${job.draft.year} 年题库吗？发布后模型不能直接修改正式题库。`,
+      confirmLabel: '批准入库',
+    })) return
+    beginPublishProgress('正在发布题库')
+    const result: any = await post(`/imports/${job.id}/publish`)
+    job.status = 'published'
     notice.value = '题库已正式发布'
     await loadJobs()
-    await openJob(current.value.id)
     const paperIds = result.paper_ids || (result.paper_id ? [result.paper_id] : [])
+    job.published_paper_ids = paperIds
     if (paperIds.length) {
       await prepareLabelPrompt({
-        kind: 'papers',
-        title: result.scope_title || current.value.draft.title || `${current.value.draft.year} 年题库`,
-        year: null,
-        paperIds,
-        questionBankProfileId: Number(
-          current.value.profile_id || questionBankProfilesState.activeId,
-        ),
+        kind: 'papers', title: result.scope_title || job.draft.title || `${job.draft.year} 年题库`,
+        year: null, paperIds,
+        questionBankProfileId: Number(job.profile_id || questionBankProfilesState.activeId),
       })
     }
-  } catch (e) { error.value = String(e) }
-  finally { busy.value = false }
+  } catch (cause) { error.value = String(cause) }
+  finally { endPublishProgress(); busy.value = false }
 }
 
 function uploadEsq() { chooseImportDestination('esq') }
 
 async function performEsqUpload(profileId: number) {
-  if (!selectedEsqFile.value) return
+  if (busy.value || !selectedEsqFile.value) return
   busy.value = true; error.value = ''
   const form = new FormData(); form.append('file', selectedEsqFile.value)
   form.append('profile_id', String(profileId))
@@ -597,8 +673,10 @@ async function performEsqUpload(profileId: number) {
 }
 
 async function removeImportJob(job: any, esq = false) {
-  if (!confirm(`将未完成导入“${job.filename}”及原始文件移入回收站？`)) return
+  if (busy.value) return
+  busy.value = true; error.value = ''
   try {
+    if (!await confirmDialog({ title: '删除导入草稿', message: `将未完成导入“${job.filename}”及原始文件移入回收站？`, confirmLabel: '移入回收站', danger: true })) return
     await del(`${esq ? '/question-banks/imports' : '/imports'}/${job.id}`)
     if (esq) {
       if (esqCurrent.value?.id === job.id) esqCurrent.value = null
@@ -609,12 +687,22 @@ async function removeImportJob(job: any, esq = false) {
     }
   } catch (cause) {
     error.value = String(cause)
-  }
+  } finally { busy.value = false }
 }
 
 async function openEsqJob(id: number) {
-  current.value = null
-  esqCurrent.value = await get(`/question-banks/imports/${id}`)
+  if (busy.value) return
+  try {
+    const job = await get(`/question-banks/imports/${id}`)
+    current.value = null
+    esqCurrent.value = job
+    esqResolutions.value = {}
+  } catch (cause) { error.value = String(cause) }
+}
+
+function closeEsqPreview() {
+  if (busy.value) return
+  esqCurrent.value = null
   esqResolutions.value = {}
 }
 
@@ -623,7 +711,7 @@ function conflictAction(paperKey: string, action: 'keep_existing' | 'replace_wit
 }
 
 async function publishEsq() {
-  if (!esqCurrent.value) return
+  if (busy.value || !esqCurrent.value || esqCurrent.value.status === 'published') return
   const conflicts = esqCurrent.value.preview?.conflicts?.filter((item: any) => item.existing) || []
   const missing = conflicts.filter((item: any) => !esqResolutions.value[item.paperKey])
   if (missing.length) {
@@ -632,14 +720,15 @@ async function publishEsq() {
   }
   busy.value = true; error.value = ''
   try {
+    beginPublishProgress('正在发布 ESQ 题库包')
     const resolutions = Object.entries(esqResolutions.value).map(([paper_key, action]) => ({ paper_key, action }))
     const result: any = await post(`/question-banks/imports/${esqCurrent.value.id}/publish`, {
       resolutions,
       import_ai_labels: true,
     })
     notice.value = 'ESQ 题库已发布'
+    esqCurrent.value.status = 'published'
     await loadEsqJobs()
-    await openEsqJob(esqCurrent.value.id)
     if (result.paperIds?.length) {
       await prepareLabelPrompt({
         kind: 'papers',
@@ -654,10 +743,11 @@ async function publishEsq() {
       notice.value = 'ESQ 题库已发布；本次选择保留的题库无需重新标注'
     }
   } catch (e) { error.value = String(e) }
-  finally { busy.value = false }
+  finally { endPublishProgress(); busy.value = false }
 }
 
 async function exportEsq(includeLabels = false) {
+  if (busy.value) return
   busy.value = true; error.value = ''
   try {
     const response = await fetch(`/api/question-banks/export?include_answers=true&include_labels=${includeLabels}`)
@@ -676,78 +766,13 @@ async function exportEsq(includeLabels = false) {
 </script>
 
 <template>
-  <div class="page">
+  <div class="page import-page">
     <div class="page-head"><div><span class="eyebrow">IMPORT & REVIEW</span><h1>导入题库</h1><p class="lead">试卷和答案分别解析。即使答案缺失，也可以先保存题目草稿，再人工补全。</p></div></div>
-    <QuestionBankSwitcher @changed="handleProfileChanged" />
+    <fieldset class="import-switcher" :disabled="busy"><QuestionBankSwitcher @changed="handleProfileChanged" /></fieldset>
+    <div v-if="publishStage" class="import-publish-progress card" role="status" aria-live="polite"><RefreshCw :size="17" /><span>{{ publishStage }} · {{ publishSeconds }} 秒，请保持本页开启。</span></div>
     <div v-if="error" class="warning" role="alert">{{ error }}</div><div v-if="notice" class="card" style="margin-bottom:16px;color:var(--success)">{{ notice }}</div>
 
-    <section class="question-label-workspace card" aria-labelledby="question-label-title">
-      <div class="question-label-heading">
-        <span class="api-profile-icon"><LibraryBig :size="21" /></span>
-        <div>
-          <span class="eyebrow">QUESTION INTELLIGENCE</span>
-          <h2 id="question-label-title">题库智能标注</h2>
-          <p>题库批准入库后再启动模型标注，避免草稿被提前消费 Token。默认只处理刚刚入库的试卷，已锁定的人工标签不会被覆盖。</p>
-        </div>
-      </div>
-      <div class="question-label-controls import-label-controls">
-        <div class="field">
-          <label for="label-scope">标注范围</label>
-          <select id="label-scope" v-model="labelScopeMode" :disabled="questionLabelingState.isRunning" @change="loadSelectedLabelStatus">
-            <option value="all">全部未标注题目</option>
-            <option v-if="importLabelScope" value="current">本次入库：{{ importLabelScope.title }}</option>
-            <option v-for="year in questionLabelingState.status?.years || []" :key="year" :value="`year:${year}`">{{ year }} 年未标注题目</option>
-          </select>
-        </div>
-        <label class="default-profile-check label-overwrite">
-          <input v-model="overwriteUnlocked" type="checkbox" :disabled="questionLabelingState.isRunning">
-          重新标注未锁定题目
-        </label>
-        <div class="question-label-actions">
-          <button v-if="!questionLabelingState.isRunning" class="button" type="button" @click="prepareLabelPrompt(selectedLabelScope())">
-            <Play :size="16" />开始标注
-          </button>
-          <button v-else class="button secondary" type="button" :disabled="questionLabelingState.isPausing" @click="pauseQuestionLabeling">
-            <Pause :size="16" />{{ questionLabelingState.isPausing ? '正在暂停…' : '暂停' }}
-          </button>
-          <button class="button secondary" type="button" :disabled="questionLabelingState.isRunning" @click="loadQuestionLabels">
-            <Search :size="16" />查看与校正
-          </button>
-        </div>
-      </div>
-      <div v-if="questionLabelingState.status" class="question-label-progress">
-        <div>
-          <span>已标注 {{ questionLabelingState.status.labeled }} / {{ questionLabelingState.status.total }} 道</span>
-          <strong>{{ questionLabelingState.status.percentage }}%</strong>
-        </div>
-        <div class="question-label-track" role="progressbar" :aria-valuenow="questionLabelingState.status.percentage" aria-valuemin="0" aria-valuemax="100">
-          <span :style="{ width: `${questionLabelingState.status.percentage}%` }" />
-        </div>
-        <small>{{ questionLabelingState.status.locked }} 道标签已锁定；模型成功标注和人工校正结果都会自动锁定，只有明确解除锁定后才允许重新标注。</small>
-      </div>
-      <p v-if="questionLabelingState.message" class="api-profile-notice" role="status">{{ questionLabelingState.message }}</p>
-      <p v-if="questionLabelingState.error" class="warning" role="alert">{{ questionLabelingState.error }}</p>
-      <div v-if="labelManagerOpen" class="question-label-manager">
-        <div class="question-label-filter">
-          <div class="field">
-            <label for="label-search">搜索标签</label>
-            <input id="label-search" v-model="labelSearch" placeholder="篇目、题号或主要考点" @keyup.enter="loadQuestionLabels">
-          </div>
-          <button class="button secondary compact" type="button" @click="loadQuestionLabels"><Search :size="15" />搜索</button>
-        </div>
-        <div v-if="labelRows.length" class="question-label-list">
-          <button v-for="row in labelRows" :key="row.question_id" type="button" class="question-label-row" :class="{ unlabeled: !row.primary_skill }" @click="editLabel(row)">
-            <span><strong>{{ row.year }} 年 · {{ row.unit_title }}</strong><small>第 {{ row.number }} 题</small></span>
-            <span>{{ row.primary_skill || '尚未标注' }}{{ row.content_review_required ? ' · 题面已修正，标签待复核' : '' }}</span>
-            <span class="question-label-state"><Lock v-if="row.locked" :size="13" />{{ row.locked ? '已锁定' : '可更新' }}</span>
-          </button>
-        </div>
-        <div v-else class="api-model-empty">当前范围没有符合条件的题目。</div>
-      </div>
-    </section>
-
-    <div class="grid" style="grid-template-columns:320px 1fr">
-      <aside>
+    <section class="import-source-grid">
         <div class="card">
           <label class="field"><span>试卷 Word / 文本型 PDF（必选）</span><input type="file" accept=".doc,.docx,.pdf" @change="selectedFile=($event.target as HTMLInputElement).files?.[0] || null"></label>
           <label class="field"><span>答案附件（可多选）</span><input type="file" accept=".doc,.docx,.pdf" multiple @change="selectedAnswerFiles=Array.from(($event.target as HTMLInputElement).files || [])"><small v-if="selectedAnswerFiles.length">已选择 {{ selectedAnswerFiles.length }} 份答案附件</small></label>
@@ -778,17 +803,20 @@ async function exportEsq(includeLabels = false) {
             <button class="button ghost compact" :disabled="busy" @click="exportEsq(true)"><Sparkles :size="15" />含 AI 标签</button>
           </div>
         </div>
+    </section>
+    <div class="import-review-grid">
+      <aside>
         <div v-if="esqJobs.length">
           <div class="section-title"><h3>ESQ 导入记录</h3><button class="button ghost compact" @click="loadEsqJobs"><RefreshCw :size="14" />刷新</button></div>
           <div v-for="job in esqJobs" :key="job.id" class="card import-history-card">
-            <button type="button" class="import-history-open" @click="openEsqJob(job.id)"><span><strong>{{ job.detected_year || '多年份' }}</strong><small>{{ job.filename }}</small></span><span v-if="job.published_paper_ids?.length" class="pill">已入库</span></button>
+            <button type="button" class="import-history-open" :disabled="busy" @click="openEsqJob(job.id)"><span><strong>{{ job.detected_year || '多年份' }}</strong><small>{{ job.filename }}</small></span><span v-if="job.published_paper_ids?.length" class="pill">已入库</span></button>
             <button v-if="job.published_paper_ids?.length" class="button ghost compact" type="button" @click="promptLabelingForJob(job)"><Sparkles :size="14" />开始智能标注</button>
             <button v-else class="button ghost danger compact" type="button" @click="removeImportJob(job, true)"><Trash2 :size="14" />删除草稿</button>
           </div>
         </div>
         <div class="section-title"><h3>导入记录</h3></div>
         <div v-for="job in jobs" :key="job.id" class="card import-history-card">
-          <button type="button" class="import-history-open" @click="openJob(job.id)"><span><strong>{{ job.detected_year || '未知年份' }}</strong><small>{{ job.filename }}</small></span><span v-if="job.published_paper_ids?.length" class="pill">已入库</span></button>
+          <button type="button" class="import-history-open" :disabled="busy" @click="openJob(job.id)"><span><strong>{{ job.detected_year || '未知年份' }}</strong><small>{{ job.filename }}</small></span><span v-if="job.published_paper_ids?.length" class="pill">已入库</span></button>
           <button v-if="job.published_paper_ids?.length" class="button ghost compact" type="button" @click="promptLabelingForJob(job)"><Sparkles :size="14" />开始智能标注</button>
           <button v-else class="button ghost danger compact" type="button" @click="removeImportJob(job)"><Trash2 :size="14" />删除草稿</button>
         </div>
@@ -796,8 +824,8 @@ async function exportEsq(includeLabels = false) {
       <section v-if="esqCurrent?.preview" class="grid">
         <div class="card">
           <div style="display:flex;justify-content:space-between;align-items:center">
-            <div><span class="pill">ESQ {{ esqCurrent.draft_data?.manifest?.schemaVersion || '1.0' }}</span><h2 style="margin-top:12px">{{ esqCurrent.preview.title }}</h2><p class="lead" style="font-size:12px;margin-top:7px">发布者：{{ esqCurrent.preview.publisher }} · {{ esqCurrent.preview.contentVersion }}</p></div>
-            <button class="button" :disabled="busy" @click="publishEsq"><FileCheck2 :size="17" />发布题库包</button>
+            <div><span class="pill">ESQ {{ esqCurrent.draft_data?.manifest?.schemaVersion || '1.0' }}</span><h2 style="margin-top:12px">{{ esqCurrent.preview.title }}</h2><p class="lead" style="font-size:12px;margin-top:7px">导入目标题库：{{ esqDestinationName }} · 发布者：{{ esqCurrent.preview.publisher }} · {{ esqCurrent.preview.contentVersion }}</p></div>
+            <button class="button" :disabled="busy || esqCurrent.status === 'published'" @click="publishEsq"><FileCheck2 :size="17" />{{ esqCurrent.status === 'published' ? '已入库' : '发布题库包' }}</button><button class="button secondary" :disabled="busy" @click="closeEsqPreview">关闭预览</button>
           </div>
           <div class="grid grid-4" style="margin-top:18px">
             <div class="stat-card card"><span class="stat-label">年份</span><strong>{{ esqCurrent.preview.totals.papers }}</strong></div>
@@ -821,7 +849,7 @@ async function exportEsq(includeLabels = false) {
       </section>
       <section v-if="current?.draft" class="grid">
         <div class="card">
-          <div style="display:flex;justify-content:space-between;align-items:center"><div><span class="pill">{{ current.draft.detected_format }}</span><h2 style="margin-top:12px">{{ current.draft.title }}</h2><p class="lead" style="font-size:12px;margin-top:7px">试卷来源：{{ current.draft.source_file }} · 答案来源：{{ current.draft.answer_source || '未提供' }}</p></div><button class="button" :disabled="current.draft.warnings?.length" @click="publish"><FileCheck2 :size="17" />批准入库</button></div>
+          <div style="display:flex;justify-content:space-between;align-items:center"><div><span class="pill">{{ current.draft.detected_format }}</span><h2 style="margin-top:12px">{{ current.draft.title }}</h2><p class="lead" style="font-size:12px;margin-top:7px">试卷来源：{{ current.draft.source_file }} · 答案来源：{{ current.draft.answer_source || '未提供' }}</p></div><button class="button" :disabled="draftReadOnly" @click="publish"><FileCheck2 :size="17" />批准入库</button></div>
           <div class="answer-status" :class="current.draft.answer_status?.status || 'missing'">
             <FileKey2 :size="18" />
             <div><strong>{{ answerProgress.completed }}/{{ answerProgress.total }} 道答案已填写</strong><span>{{ current.draft.answer_status?.message || '请在下方校对并补全标准答案' }}</span></div>
@@ -844,6 +872,7 @@ async function exportEsq(includeLabels = false) {
           </div>
           <div v-for="warning in current.draft.warnings" class="warning" :key="warning">{{ warning }}</div>
         </div>
+        <fieldset class="import-draft-fields" :disabled="draftReadOnly">
         <div class="card answer-editor">
           <div class="answer-editor-head">
             <div><h3>答案校对</h3><p class="lead">自动识别只负责预填。你可以修改单题答案，也可以按篇目粘贴答案串。</p></div>
@@ -921,16 +950,82 @@ async function exportEsq(includeLabels = false) {
           <details class="advanced-json-editor">
             <summary>高级 JSON 入口（仅用于批量修复）</summary>
             <p class="lead">普通校对建议使用上方字段编辑器；JSON 入口保留给熟悉 ESQ 结构的用户。</p>
-            <textarea :value="JSON.stringify(current.draft,null,2)" @change="current.draft=JSON.parse(($event.target as HTMLTextAreaElement).value)"></textarea>
+            <textarea :value="JSON.stringify(current.draft,null,2)" @change="updateDraftJson(($event.target as HTMLTextAreaElement).value)"></textarea>
           </details>
         </div>
+        </fieldset>
       </section>
-      <div v-else class="card empty illustrated-empty">
+      <div v-if="!current?.draft && !esqCurrent?.preview" class="card empty illustrated-empty">
         <img src="/assets/quiet-study-empty.webp" alt="" />
         <strong>等待一份新试卷</strong>
         <p>上传或选择一条导入记录后，在这里校对题库。</p>
       </div>
     </div>
+
+    <section class="question-label-workspace card" aria-labelledby="question-label-title">
+      <div class="question-label-heading">
+        <span class="api-profile-icon"><LibraryBig :size="21" /></span>
+        <div>
+          <span class="eyebrow">QUESTION INTELLIGENCE</span>
+          <h2 id="question-label-title">题库智能标注</h2>
+          <p>题库批准入库后再启动模型标注，避免草稿被提前消费 Token。默认只处理刚刚入库的试卷，已锁定的人工标签不会被覆盖。</p>
+        </div>
+      </div>
+      <div class="question-label-controls import-label-controls">
+        <div class="field">
+          <label for="label-scope">标注范围</label>
+          <select id="label-scope" v-model="labelScopeMode" :disabled="questionLabelingState.isRunning" @change="loadSelectedLabelStatus">
+            <option value="all">全部未标注题目</option>
+            <option v-if="importLabelScope" value="current">本次入库：{{ importLabelScope.title }}</option>
+            <option v-for="year in questionLabelingState.status?.years || []" :key="year" :value="`year:${year}`">{{ year }} 年未标注题目</option>
+          </select>
+        </div>
+        <label class="default-profile-check label-overwrite">
+          <input v-model="overwriteUnlocked" type="checkbox" :disabled="questionLabelingState.isRunning">
+          重新标注未锁定题目
+        </label>
+        <div class="question-label-actions">
+          <button v-if="!questionLabelingState.isRunning" class="button" type="button" @click="prepareLabelPrompt(selectedLabelScope())">
+            <Play :size="16" />开始标注
+          </button>
+          <button v-else class="button secondary" type="button" :disabled="questionLabelingState.isPausing" @click="pauseQuestionLabeling">
+            <Pause :size="16" />{{ questionLabelingState.isPausing ? '正在暂停…' : '暂停' }}
+          </button>
+          <button class="button secondary" type="button" :disabled="questionLabelingState.isRunning" @click="loadQuestionLabels">
+            <Search :size="16" />查看与校正
+          </button>
+        </div>
+      </div>
+      <div v-if="questionLabelingState.status" class="question-label-progress">
+        <div>
+          <span>已标注 {{ questionLabelingState.status.labeled }} / {{ questionLabelingState.status.total }} 道</span>
+          <strong>{{ questionLabelingState.status.percentage }}%</strong>
+        </div>
+        <div class="question-label-track" role="progressbar" :aria-valuenow="questionLabelingState.status.percentage" aria-valuemin="0" aria-valuemax="100">
+          <span :style="{ width: `${questionLabelingState.status.percentage}%` }" />
+        </div>
+        <small>{{ questionLabelingState.status.locked }} 道标签已锁定；模型成功标注和人工校正结果都会自动锁定，只有明确解除锁定后才允许重新标注。</small>
+      </div>
+      <p v-if="questionLabelingState.message" class="api-profile-notice" role="status">{{ questionLabelingState.message }}</p>
+      <p v-if="questionLabelingState.error" class="warning" role="alert">{{ questionLabelingState.error }}</p>
+      <div v-if="labelManagerOpen" class="question-label-manager">
+        <div class="question-label-filter">
+          <div class="field">
+            <label for="label-search">搜索标签</label>
+            <input id="label-search" v-model="labelSearch" placeholder="篇目、题号或主要考点" @keyup.enter="loadQuestionLabels">
+          </div>
+          <button class="button secondary compact" type="button" @click="loadQuestionLabels"><Search :size="15" />搜索</button>
+        </div>
+        <div v-if="labelRows.length" class="question-label-list">
+          <button v-for="row in labelRows" :key="row.question_id" type="button" class="question-label-row" :class="{ unlabeled: !row.primary_skill }" @click="editLabel(row)">
+            <span><strong>{{ row.year }} 年 · {{ row.unit_title }}</strong><small>第 {{ row.number }} 题</small></span>
+            <span>{{ row.primary_skill || '尚未标注' }}{{ row.content_review_required ? ' · 题面已修正，标签待复核' : '' }}</span>
+            <span class="question-label-state"><Lock v-if="row.locked" :size="13" />{{ row.locked ? '已锁定' : '可更新' }}</span>
+          </button>
+        </div>
+        <div v-else class="api-model-empty">当前范围没有符合条件的题目。</div>
+      </div>
+    </section>
 
     <div v-if="labelPromptOpen" class="label-editor-overlay" role="dialog" aria-modal="true" aria-labelledby="label-prompt-title">
       <section class="label-editor label-prompt card">
@@ -1029,3 +1124,21 @@ async function exportEsq(includeLabels = false) {
     </div>
   </div>
 </template>
+
+<style scoped>
+.import-source-grid { display:grid; grid-template-columns:minmax(0,1.6fr) minmax(0,1fr) minmax(0,1fr); gap:18px; margin-bottom:24px; align-items:start }
+.import-review-grid { display:grid; grid-template-columns:280px minmax(0,1fr); gap:22px; align-items:start; margin-bottom:24px }
+.import-source-grid > *, .import-review-grid > * { min-width:0 }
+.import-switcher, .import-draft-fields { min-width:0; padding:0; margin:0; border:0 }
+.import-draft-fields { display:grid; gap:18px }
+.import-page :deep(input[type=file]) { max-width:100%; min-width:0 }
+.import-page :deep(.card) { overflow-wrap:anywhere }
+.import-page :deep(.import-history-open) { min-width:0; width:100%; text-align:left }
+.import-page :deep(.import-history-open > span) { min-width:0 }
+.import-page :deep(.import-history-open small) { white-space:normal; overflow-wrap:anywhere }
+.import-page :deep(.card > div[style*='justify-content']) { gap:12px; flex-wrap:wrap }
+.import-publish-progress { display:flex; gap:10px; align-items:center; position:sticky; top:8px; z-index:5; border-color:var(--primary) }
+.import-page :deep(.question-label-workspace) { margin-top:24px }
+@media(max-width:1100px) { .import-source-grid { grid-template-columns:repeat(2,minmax(0,1fr)) } .import-source-grid > :first-child { grid-row:span 2 } .import-review-grid { grid-template-columns:240px minmax(0,1fr) } }
+@media(max-width:760px) { .import-source-grid, .import-review-grid { grid-template-columns:minmax(0,1fr) } .import-source-grid > :first-child { grid-row:auto } }
+</style>

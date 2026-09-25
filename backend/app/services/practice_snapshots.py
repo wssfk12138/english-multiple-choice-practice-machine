@@ -146,6 +146,25 @@ def choose_snapshot(connection: sqlite3.Connection, session_id: int, choice: str
         connection.execute("UPDATE practice_sessions SET status='abandoned',updated_at=CURRENT_TIMESTAMP WHERE id=?",(session_id,))
         return {'id':new_id}
 
+def historical_retry_snapshot(connection, round_id: int, selected: dict[int, set[int]]) -> dict:
+    source = connection.execute('SELECT s.content_snapshot FROM wrong_retry_rounds r JOIN practice_sessions s ON s.id=r.session_id WHERE r.id=? AND r.deleted_at IS NULL', (round_id,)).fetchone()
+    if source is None:
+        raise ValueError('错题记录的原练习不存在，无法安全恢复')
+    snapshot = read_snapshot(source['content_snapshot'])
+    if not snapshot.get('revision'):
+        return {}
+    units = []
+    for unit_id, ids in selected.items():
+        restored = restore_unit(connection, snapshot, unit_id)
+        key = connection.execute('SELECT external_key FROM units WHERE id=?', (unit_id,)).fetchone()[0]
+        saved = copy.deepcopy(next(item for item in snapshot['units'] if item['unit_key'] == key))
+        saved['questions'] = [item for item, question in zip(saved['questions'], restored['questions']) if question['id'] in ids]
+        if len(saved['questions']) != len(ids):
+            raise ValueError('历史记录的题目已缺失，无法安全恢复')
+        units.append(saved)
+    return {**snapshot, 'units': units}
+
+
 def current_content_revisions(connection, unit_ids: list[int]) -> str:
     revisions = {}
     for unit_id in unit_ids:

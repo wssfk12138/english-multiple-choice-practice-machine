@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { confirmDesktop } from '../services/desktopConfirm'
+import { confirmDialog } from '../platform/dialogs'
 import { RotateCcw, Trash2 } from 'lucide-vue-next'
 import { onMounted, ref } from 'vue'
 import { del, get, post } from '../api'
@@ -28,7 +28,7 @@ async function restore(item: any) {
 }
 
 async function purge(item: any) {
-  if (!await confirmDesktop(`永久删除“${item.resource_name}”？此操作无法恢复。`)) return
+  if (!await confirmDialog({ title: '永久删除', message: `永久删除“${item.resource_name}”？此操作无法恢复。`, confirmLabel: '永久删除', danger: true })) return
   try {
     await del(`/trash/${item.id}`)
     await load()

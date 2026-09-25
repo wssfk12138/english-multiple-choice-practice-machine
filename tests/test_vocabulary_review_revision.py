@@ -2,6 +2,7 @@ import sqlite3
 import unittest
 from backend.app.database import SCHEMA
 from backend.app.services import vocabulary as service
+from backend.app.services.vocabulary import ConflictError
 
 
 class ReviewRevisionTest(unittest.TestCase):
@@ -19,7 +20,7 @@ class ReviewRevisionTest(unittest.TestCase):
         revision = service._serialize_entry(self.db, 1)['review_revision']
         service.review_entry(self.db, 1, 'hard', expected_revision=revision)
         state = dict(self.db.execute('SELECT * FROM vocabulary_entries').fetchone())
-        with self.assertRaisesRegex(ValueError, '复习记录已更新'):
+        with self.assertRaisesRegex(ConflictError, '复习记录已更新'):
             service.review_entry(self.db, 1, 'again', expected_revision=revision)
         self.assertEqual(dict(self.db.execute('SELECT * FROM vocabulary_entries').fetchone()), state)
         self.assertEqual(self.db.execute('SELECT COUNT(*) FROM vocabulary_reviews').fetchone()[0], 1)
@@ -40,7 +41,7 @@ class ReviewRevisionTest(unittest.TestCase):
         revision = service._serialize_entry(self.db, 1)['review_revision']
         self.db.execute("UPDATE vocabulary_entries SET next_review_at='2030-01-01' WHERE id=1")
         self.db.commit()
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ConflictError):
             service.review_entry(self.db, 1, 'hard', expected_revision=revision)
         self.assertEqual(self.db.execute('SELECT next_review_at FROM vocabulary_entries').fetchone()[0], '2030-01-01')
 

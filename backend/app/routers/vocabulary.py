@@ -19,6 +19,7 @@ from ..services.vocabulary import (
     _serialize_entry,
     _discrimination_list,
     add_vocabulary,
+    ConflictError,
     local_similar_matches,
     queue_vocabulary_translations,
     review_entry,
@@ -41,10 +42,40 @@ def enrichment_run(request: VocabularyEnrichmentRunRequest, background_tasks: Ba
     from ..services.vocabulary_maintenance import update_enrichment_run
     from ..services.vocabulary import process_vocabulary_enrichments
     status = update_enrichment_run(connection, request.action)
-    if not status['paused'] and not status['waiting_configuration']:
+    # inventory 只建队不启动 worker；start/resume/retry 才进入后台处理。
+    if request.action != "inventory" and not status['paused'] and not status['waiting_configuration']:
         background_tasks.add_task(process_vocabulary_enrichments)
     return status
 
+
+@router.get("/status")
+def vocabulary_status(scope: str = "all", connection: sqlite3.Connection = Depends(get_db)) -> dict:
+    from datetime import datetime
+    measured_at = datetime.now().isoformat(timespec="seconds")
+    conditions = VOCABULARY_PROFILE_CONDITION if scope == "current" else "1 = 1"
+    params = [get_active_profile_id(connection)] if scope == "current" else []
+    counts = connection.execute(
+        f"""
+        SELECT COUNT(*) AS total,
+               COALESCE(SUM(CASE WHEN encounter_count >= 2 OR manually_frequent = 1 THEN 1 ELSE 0 END), 0) AS frequent,
+               COALESCE(SUM(CASE WHEN study_status = 'mastered' THEN 1 ELSE 0 END), 0) AS mastered,
+               COALESCE(SUM(CASE WHEN translation_status != 'ready' THEN 1 ELSE 0 END), 0) AS pending,
+               COALESCE(SUM(CASE WHEN translation_status = 'ready'
+                              AND study_status != 'mastered'
+                              AND (next_review_at IS NULL OR datetime(next_review_at) <= CURRENT_TIMESTAMP)
+                        THEN 1 ELSE 0 END), 0) AS review
+        FROM vocabulary_entries
+        WHERE {conditions}
+        """,
+        params,
+    ).fetchone()
+    revision = connection.execute("SELECT COALESCE(MAX(id), 0) FROM vocabulary_reviews").fetchone()[0]
+    return {
+        "scope_key": f"profile:{get_active_profile_id(connection)}" if scope == "current" else "all",
+        "revision": str(revision),
+        "counts": dict(counts),
+        "measured_at": measured_at,
+    }
 
 @router.post("")
 def create_entry(
@@ -63,6 +94,8 @@ def list_entries(
     status: str = "all",
     search: str = "",
     scope: str = "all",
+    limit: int = 0,
+    offset: int = 0,
     connection: sqlite3.Connection = Depends(get_db),
 ) -> dict:
     conditions = ["1 = 1"]
@@ -110,6 +143,31 @@ def list_entries(
         """,
         params,
     ).fetchall()
+    if limit > 0:
+        rows = connection.execute(
+            f"""
+            SELECT *,
+               (SELECT rating FROM vocabulary_reviews WHERE entry_id = vocabulary_entries.id
+                ORDER BY datetime(reviewed_at) DESC, id DESC LIMIT 1) AS last_result,
+               (
+                   SELECT context_sentence
+                   FROM vocabulary_occurrences
+                   WHERE entry_id = vocabulary_entries.id
+                   ORDER BY id DESC LIMIT 1
+               ) AS latest_sentence,
+               CASE WHEN encounter_count >= 2 OR manually_frequent = 1 THEN 1 ELSE 0 END AS is_frequent
+        FROM vocabulary_entries
+        WHERE {' AND '.join(conditions)}
+        ORDER BY
+                 CASE WHEN datetime(last_seen_at) >= datetime('now', '-7 days') THEN 0 ELSE 1 END,
+                 is_frequent DESC, encounter_count DESC, last_seen_at DESC
+        LIMIT ? OFFSET ?
+        """,
+            [*params, limit, offset],
+        ).fetchall()
+    revision = connection.execute(
+        "SELECT COALESCE(MAX(id), 0) FROM vocabulary_reviews"
+    ).fetchone()[0]
     counts = connection.execute(
         f"""
         SELECT COUNT(*) AS total,
@@ -139,7 +197,7 @@ def list_entries(
     for occurrence in connection.execute("SELECT * FROM vocabulary_occurrences"):
         histories.setdefault(occurrence["entry_id"], []).append(dict(occurrence))
     items = [project_vocabulary(item, histories.get(item["id"], [])) for item in items]
-    return {"items": items, "counts": result_counts, "scope_key": f"profile:{get_active_profile_id(connection)}" if scope == "current" else "all"}
+    return {"items": items, "counts": result_counts, "scope_key": f"profile:{get_active_profile_id(connection)}" if scope == "current" else "all", "revision": str(revision)}
 
 
 @router.get("/home")
@@ -305,8 +363,10 @@ def submit_review(
     connection: sqlite3.Connection = Depends(get_db),
 ) -> dict:
     try:
-        return review_entry(connection, entry_id, request.rating, expected_revision=request.expected_revision, mode=request.mode)
+        return review_entry(connection, entry_id, request.rating, expected_revision=request.expected_revision, mode=request.mode, command_id=request.command_id or "")
     except ValueError as error:
         raise HTTPException(409, str(error)) from error
     except LookupError as error:
         raise HTTPException(404, str(error)) from error
+    except ConflictError as error:
+        raise HTTPException(409, str(error)) from error

@@ -43,7 +43,7 @@ class RemoteQuestionBankRouterTests(unittest.TestCase):
             self.assertEqual(raised.exception.status_code, 422)
             self.assertFalse(downloaded.exists())
             fetch.assert_called_once_with("https://example.com/catalog.json")
-            download.assert_called_once_with(catalog["packages"][0], remote_question_banks.UPLOAD_DIR)
+            download.assert_called_once_with(catalog["packages"][0], remote_question_banks.UPLOAD_DIR, public_proxy_fallback=False)
         connection.close()
 
 

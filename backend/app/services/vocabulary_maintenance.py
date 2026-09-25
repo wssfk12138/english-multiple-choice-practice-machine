@@ -17,11 +17,11 @@ def enrichment_status(connection):
     return {**counts, 'paused': enrichment_paused(connection), 'waiting_configuration': not configured}
 
 def update_enrichment_run(connection, action):
-    if action not in {'start', 'pause', 'resume', 'retry'}:
+    if action not in {'start', 'pause', 'resume', 'retry', 'inventory'}:
         raise ValueError('无效的补缺操作')
     if action in {'pause', 'resume'}:
         connection.execute('INSERT INTO app_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', (PAUSE_KEY, '1' if action == 'pause' else '0'))
-    if action == 'start':
+    if action in {'start', 'inventory'}:
         # A ready job can legitimately have empty optional fields. Never requeue it
         # just because a model found no suitable antonym or variant.
         rows = connection.execute("SELECT e.* FROM vocabulary_entries e LEFT JOIN vocabulary_enrichment_jobs j ON j.entry_id=e.id WHERE j.entry_id IS NULL AND e.translation_status='ready'").fetchall()

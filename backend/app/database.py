@@ -150,6 +150,43 @@ CREATE TABLE IF NOT EXISTS wrong_stats (
     FOREIGN KEY (question_id) REFERENCES questions(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS wrong_retry_rounds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    unit_id INTEGER NOT NULL,
+    session_id INTEGER NOT NULL,
+    round_number INTEGER NOT NULL,
+    question_count INTEGER NOT NULL DEFAULT 0,
+    correct_count INTEGER NOT NULL DEFAULT 0,
+    wrong_count INTEGER NOT NULL DEFAULT 0,
+    submitted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TEXT,
+    FOREIGN KEY (unit_id) REFERENCES units(id) ON DELETE CASCADE,
+    FOREIGN KEY (session_id) REFERENCES practice_sessions(id) ON DELETE CASCADE,
+    UNIQUE (unit_id, round_number)
+);
+
+CREATE TABLE IF NOT EXISTS wrong_retry_round_questions (
+    round_id INTEGER NOT NULL,
+    question_id INTEGER NOT NULL,
+    user_answer TEXT NOT NULL DEFAULT '',
+    is_correct INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (round_id, question_id),
+    FOREIGN KEY (round_id) REFERENCES wrong_retry_rounds(id) ON DELETE CASCADE,
+    FOREIGN KEY (question_id) REFERENCES questions(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS wrong_current_questions (
+    unit_id INTEGER NOT NULL,
+    question_id INTEGER NOT NULL,
+    since_round_id INTEGER,
+    deleted_at TEXT,
+    PRIMARY KEY (unit_id, question_id),
+    FOREIGN KEY (unit_id) REFERENCES units(id) ON DELETE CASCADE,
+    FOREIGN KEY (question_id) REFERENCES questions(id) ON DELETE CASCADE,
+    FOREIGN KEY (since_round_id) REFERENCES wrong_retry_rounds(id) ON DELETE SET NULL
+);
+
+
 CREATE TABLE IF NOT EXISTS vocabulary_entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     term TEXT NOT NULL,
@@ -214,6 +251,7 @@ CREATE TABLE IF NOT EXISTS vocabulary_reviews (
     entry_id INTEGER NOT NULL,
     rating TEXT NOT NULL,
     mode TEXT NOT NULL DEFAULT 'scheduled',
+    sync_id TEXT,
     reviewed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     next_review_at TEXT,
     FOREIGN KEY (entry_id) REFERENCES vocabulary_entries(id) ON DELETE CASCADE
@@ -472,6 +510,7 @@ CREATE INDEX IF NOT EXISTS idx_vocab_occurrences_entry
     ON vocabulary_occurrences(entry_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_vocab_translation_queue
     ON vocabulary_entries(translation_status, user_edited, updated_at);
+CREATE INDEX IF NOT EXISTS idx_vocab_reviews_sync ON vocabulary_reviews(sync_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_profiles_single_default
     ON ai_profiles(is_default) WHERE is_default = 1;
 CREATE INDEX IF NOT EXISTS idx_ai_profile_models_selector
@@ -624,8 +663,10 @@ def _run_migrations(connection: sqlite3.Connection) -> None:
     _ensure_column(connection, "vocabulary_entries", "last_result", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(connection, "vocabulary_entries", "lapse_count", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(connection, "vocabulary_reviews", "mode", "TEXT NOT NULL DEFAULT 'scheduled'")
+    _ensure_column(connection, "vocabulary_reviews", "sync_id", "TEXT")
     _ensure_column(connection, 'wrong_stats', 'attempt_ledger', 'TEXT')
     _ensure_column(connection, 'practice_sessions', 'sync_id', 'TEXT')
+    _ensure_column(connection, 'practice_sessions', 'updated_at', 'TEXT')
     connection.execute(
         """
         INSERT INTO question_bank_profiles (name, description, is_default)
@@ -805,6 +846,22 @@ def _run_migrations(connection: sqlite3.Connection) -> None:
             ON trash_entries(purge_after, restored_at);
         """
     )
+    migrated = connection.execute(
+        "SELECT 1 FROM app_migrations WHERE migration_key = 'wrong-current-pool-v1'"
+    ).fetchone()
+    if migrated is None:
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO wrong_current_questions (unit_id, question_id)
+            SELECT questions.unit_id, wrong_stats.question_id
+            FROM wrong_stats
+            JOIN questions ON questions.id = wrong_stats.question_id
+            WHERE wrong_stats.wrong_count > 0
+            """
+        )
+        connection.execute(
+            "INSERT INTO app_migrations (migration_key) VALUES ('wrong-current-pool-v1')"
+        )
 
 
 def initialize_database() -> None:

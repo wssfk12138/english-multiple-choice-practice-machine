@@ -16,6 +16,7 @@ import {
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { get, post, put } from '../api'
+import { confirmDialog } from '../platform/dialogs'
 import PracticeContentChoice from '../components/PracticeContentChoice.vue'
 import ContentBlocks from '../components/ContentBlocks.vue'
 import PassageBlank from '../components/PassageBlank.vue'
@@ -100,6 +101,10 @@ const currentListeningQuestion = computed(() => {
   return questions.find((question: any) => question.id === currentListeningQuestionId.value) || questions.find((question: any) => !String(question.user_answer || '').trim()) || questions[0] || null
 })
 const currentListeningQuestionNumber = computed(() => currentListeningQuestion.value?.number ?? null)
+const orderingFixedSlots = computed(() => {
+  const slots = activeUnit.value?.shared_data?.fixed_slots
+  return Array.isArray(slots) ? slots : []
+})
 const timerElapsedMs = computed(() => {
   const state = timerState.value
   if (!state) return 0
@@ -381,12 +386,20 @@ function startTimedPractice() {
   }
   timerPromptVisible.value = false
   persistTimer()
+  resetPracticeScroll()
 }
 
 function startWithoutTimer() {
   timerState.value = { mode: 'off', elapsedMs: 0, startedAt: null }
   timerPromptVisible.value = false
   persistTimer()
+  resetPracticeScroll()
+}
+
+function resetPracticeScroll() {
+  ;(document.activeElement as HTMLElement | null)?.blur?.()
+  window.scrollTo(0, 0)
+  document.documentElement.scrollTop = 0
 }
 
 function pauseTimer() {
@@ -470,7 +483,12 @@ onBeforeUnmount(() => {
 })
 onBeforeRouteLeave(async () => {
   if (isListening.value && session.value?.status === 'active' && !activeUnitSubmitted.value) {
-    const proceed = window.confirm('听力练习尚未完成，本次练习记录不会保留。是否继续退出？')
+    const proceed = await confirmDialog({
+      title: '退出听力练习？',
+      message: '听力练习尚未完成，本次练习记录不会保留。',
+      confirmLabel: '继续退出',
+      danger: true,
+    })
     if (!proceed) return false
   }
   await flushVocabularyTranslations('practice_exit')
@@ -627,7 +645,12 @@ async function submitCurrentUnit() {
     await focusUnanswered(missing.unitIndex, missing.question)
     return
   }
-  if (!confirm(`确定提交“${activeUnit.value.title}”吗？提交后会显示本篇对错，且本篇不能继续修改。`)) return
+  const confirmed = await confirmDialog({
+    title: '确认提交本篇',
+    message: `提交“${activeUnit.value.title}”后会显示本篇对错，且本篇不能继续修改。`,
+    confirmLabel: '确认提交',
+  })
+  if (!confirmed) return
   const submittedUnitId = activeUnit.value.id
   try {
     session.value = await post(
@@ -648,7 +671,12 @@ async function submitSession() {
     return
   }
   const label = session.value.mode === 'paper' ? '整年试卷' : '本次练习'
-  if (!confirm(`确定提交${label}吗？提交后才会显示对错，且不能继续修改。`)) return
+  const confirmed = await confirmDialog({
+    title: session.value.mode === 'paper' ? '确认提交整卷' : '确认提交练习',
+    message: `提交${label}后才会显示对错，且不能继续修改。`,
+    confirmLabel: '确认提交',
+  })
+  if (!confirmed) return
   try {
     session.value = await post(`/practice/sessions/${session.value.id}/submit`)
     finishTimer()
@@ -661,6 +689,7 @@ async function submitSession() {
 }
 
 function switchUnit(index: number) {
+  if (!session.value?.units?.[index] || saving.value !== null) return
   activeUnitIndex.value = index
   unansweredNotice.value = ''
   highlightedQuestionId.value = null
@@ -821,7 +850,7 @@ async function copySelectedTerm() {
           @playback-start="currentListeningQuestion && focusListeningQuestion(currentListeningQuestion.id)"
         />
         <template v-else>
-        <h1>{{ activeUnit.unit_type === 'cloze' ? 'Use of English' : activeUnit.title }}</h1>
+        <h1 v-if="!isPartB">{{ activeUnit.unit_type === 'cloze' ? 'Use of English' : activeUnit.title }}</h1>
         <p v-if="activeUnit.shared_data?.directions" class="lead" style="margin-bottom:24px">{{ activeUnit.shared_data.directions }}</p>
         <div v-if="isOrdering" class="ordering-reference-sheet" aria-label="候选段落 A 到 G">
           <article v-for="option in candidateOptions" :key="option.stable_key" class="ordering-paragraph" data-vocab-text @contextmenu="openVocabularyMenu">
@@ -853,6 +882,20 @@ async function copySelectedTerm() {
       <section class="question-pane">
         <div v-if="isOrdering" class="ordering-board">
           <div class="ordering-section-heading"><span>选择答案</span><small>{{ activeUnit.questions.filter((question: any) => question.user_answer).length }} / {{ activeUnit.questions.length }} 已完成</small></div>
+          <div
+            v-if="orderingFixedSlots.length"
+            class="ordering-fixed-slots"
+            aria-label="原题固定段落位置"
+          >
+            <span class="ordering-fixed-caption">原题固定位置</span>
+            <div class="ordering-fixed-chain">
+              <template v-for="(slot, index) in orderingFixedSlots" :key="`${slot.type}-${slot.number ?? slot.label}-${index}`">
+                <strong v-if="slot.type === 'question'" class="ordering-fixed-question">{{ slot.number }}</strong>
+                <span v-else class="ordering-fixed-label">{{ slot.label }}</span>
+                <span v-if="index < orderingFixedSlots.length - 1" class="ordering-slot-arrow" aria-hidden="true">→</span>
+              </template>
+            </div>
+          </div>
           <div class="ordering-answer-list">
             <div v-for="question in activeUnit.questions" :key="question.id" class="ordering-answer-row" :class="{'unanswered-focus': highlightedQuestionId === question.id}" :data-question-id="question.id">
               <strong>{{ question.number }}.</strong>

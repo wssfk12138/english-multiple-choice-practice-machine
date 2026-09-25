@@ -34,6 +34,7 @@ from ..services.ai_client import (
 from ..services.ai_adapters import normalize_adapter, normalize_reasoning_effort
 from ..services.docx_parser import validate_draft
 from ..services.question_labeling import (
+    _resolve_question_bank_profile_id,
     _update_run_status,
     label_next_unit,
     labeling_status,
@@ -567,6 +568,51 @@ def delete_conversation(
     return {"ok": True}
 
 
+class AgentTurnRequest(BaseModel):
+    profile_id: int
+    model: str = Field(max_length=200)
+    reasoning_effort: str | None = None
+    messages: list[dict[str, str]] = Field(max_length=30)
+
+
+@router.post("/agent-turn")
+def agent_turn(request: AgentTurnRequest, connection: sqlite3.Connection = Depends(get_db)) -> dict:
+    profile = _profile_or_404(connection, request.profile_id)
+    selected = connection.execute(
+        "SELECT 1 FROM ai_profile_models WHERE profile_id = ? AND model_id = ? AND is_visible = 1 AND is_available = 1",
+        (request.profile_id, request.model),
+    ).fetchone()
+    if not profile["enabled"] or not selected:
+        raise HTTPException(400, "所选模型当前不可用于对话")
+    if (len(json.dumps(request.messages, ensure_ascii=False)) > 160000
+            or any(m.get("role") not in ("system", "user", "assistant") or "content" not in m for m in request.messages)):
+        raise HTTPException(400, "工具上下文超出限制")
+    try:
+        return {"content": chat_completion(connection, request.messages, profile_id=request.profile_id, model=request.model, max_tokens=4096, reasoning_effort=request.reasoning_effort)}
+    except (ValueError, LookupError, httpx.HTTPError) as error:
+        raise HTTPException(400, f"工具对话失败：{error}") from error
+
+
+class AgentExchangeRequest(BaseModel):
+    conversation_id: int
+    profile_id: int
+    model: str = Field(max_length=200)
+    message: str = Field(max_length=20000)
+    answer: str = Field(max_length=30000)
+
+
+@router.post("/agent-exchange")
+def save_agent_exchange(request: AgentExchangeRequest, connection: sqlite3.Connection = Depends(get_db)) -> dict:
+    _conversation_payload(connection, request.conversation_id)
+    with connection:
+        for role, content in (("user", request.message), ("assistant", request.answer)):
+            connection.execute("INSERT INTO ai_messages (conversation_id, role, content, profile_id, model_id) VALUES (?, ?, ?, ?, ?)",
+                               (request.conversation_id, role, content, request.profile_id, request.model))
+        connection.execute("UPDATE ai_conversations SET title = CASE WHEN title = '新对话' THEN ? ELSE title END, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                           (request.message[:28], request.conversation_id))
+    return {"ok": True}
+
+
 @router.post("/chat")
 def chat(
     request: AiChatRequest,
@@ -705,11 +751,13 @@ def _latest_wrong_snapshot(
     connection: sqlite3.Connection,
     unit_ids: list[int],
     question_ids: list[int],
+    retry_session_ids: dict[int, int] | None = None,
 ) -> dict[str, object]:
     """Capture each unit's most recent submitted wrong answers for comparison."""
     placeholders = ",".join("?" for _ in question_ids)
     snapshot: dict[str, object] = {}
     for unit_id in unit_ids:
+        retry_session_id = (retry_session_ids or {}).get(unit_id)
         rows = connection.execute(
             f"""
             SELECT q.id, q.number,
@@ -717,8 +765,9 @@ def _latest_wrong_snapshot(
                     FROM practice_answers AS pa
                     JOIN practice_sessions AS ps ON ps.id = pa.session_id
                     WHERE pa.question_id = q.id
-                      AND pa.is_correct IS NOT NULL
+                      AND pa.is_correct = 0
                       AND TRIM(pa.user_answer) <> ''
+                      {"AND pa.session_id = ?" if retry_session_id else ""}
                     ORDER BY COALESCE(ps.submitted_at, pa.answered_at) DESC,
                              pa.id DESC
                     LIMIT 1) AS user_answer
@@ -726,7 +775,8 @@ def _latest_wrong_snapshot(
             WHERE q.unit_id = ? AND q.id IN ({placeholders})
             ORDER BY q.sequence
             """,
-            (unit_id, *question_ids),
+            ((retry_session_id, unit_id, *question_ids)
+             if retry_session_id else (unit_id, *question_ids)),
         ).fetchall()
         errors = [
             {
@@ -739,6 +789,27 @@ def _latest_wrong_snapshot(
         ]
         snapshot[str(unit_id)] = {"errors": errors}
     return snapshot
+
+
+def _latest_completed_wrong_retry_session(
+    connection: sqlite3.Connection,
+    unit_id: int,
+    after_session_id: int,
+) -> int | None:
+    row = connection.execute(
+        """
+        SELECT submissions.session_id
+        FROM practice_unit_submissions AS submissions
+        JOIN practice_sessions AS sessions ON sessions.id = submissions.session_id
+        WHERE submissions.unit_id = ?
+          AND submissions.session_id > ?
+          AND sessions.mode = 'wrong'
+        ORDER BY submissions.session_id DESC
+        LIMIT 1
+        """,
+        (unit_id, after_session_id),
+    ).fetchone()
+    return int(row["session_id"]) if row else None
 
 
 @router.post("/analyze-wrong")
@@ -792,21 +863,19 @@ def analyze_wrong(
 
     all_retried = True
     locked_report_ids: list[int] = []
+    retry_session_ids: dict[int, int] = {}
     for unit_id in unit_ids:
         state = states_by_unit.get(unit_id)
         if state is None:
             continue
-        completed = connection.execute(
-            """
-            SELECT 1 FROM practice_unit_submissions
-            WHERE unit_id = ? AND session_id > ?
-            LIMIT 1
-            """,
-            (unit_id, state["analyzed_session_id"]),
-        ).fetchone()
-        if not completed:
+        completed_session_id = _latest_completed_wrong_retry_session(
+            connection, unit_id, int(state["analyzed_session_id"])
+        )
+        if completed_session_id is None:
             all_retried = False
             locked_report_ids.append(int(state["report_id"]))
+        else:
+            retry_session_ids[unit_id] = completed_session_id
 
     cached_report = report if report is not None and not all_retried else None
     if cached_report is None and locked_report_ids:
@@ -857,18 +926,29 @@ def analyze_wrong(
             if isinstance(parsed, dict) and str(unit_id) in parsed:
                 previous_snapshot.setdefault(str(unit_id), parsed[str(unit_id)])
 
-    try:
-        diagnoses, _ = diagnose_wrong_answers(
-            connection,
-            question_ids,
-            previous_snapshot=previous_snapshot or None,
-        )
-        aggregate = aggregate_diagnoses(diagnoses)
-        content = write_anonymous_report(connection, aggregate)
-        profile = get_ai_profile(connection)
-        input_snapshot = _latest_wrong_snapshot(
-            connection, unit_ids, question_ids
-        )
+    input_snapshot = _latest_wrong_snapshot(
+        connection, unit_ids, question_ids, retry_session_ids
+    )
+    current_error_ids = {
+        int(item["question_id"])
+        for unit in input_snapshot.values()
+        if isinstance(unit, dict)
+        for item in unit.get("errors", [])
+        if isinstance(item, dict) and item.get("question_id")
+    }
+    scope_title = request.scope_title or request.focus[:80]
+
+    # A completed retry that contains no new wrong choices is still a completed
+    # analysis cycle. Lock a local report so the user is not prompted to call a
+    # model for an empty diagnosis.
+    if states_by_unit and not current_error_ids:
+        aggregate = {
+            "question_count": 0,
+            "categories": [],
+            "recommended_actions": ["本次重做没有新的错误选项，无需再次进行错题分析。"],
+            "uncertain_count": 0,
+        }
+        content = "本次重做没有新的错误选项，无需再次进行错题分析。"
         cursor = connection.execute(
             """
             INSERT INTO wrong_analysis_reports
@@ -880,7 +960,56 @@ def analyze_wrong(
                 scope_key,
                 json.dumps(unit_ids),
                 json.dumps(input_snapshot, ensure_ascii=False),
-                request.scope_title or request.focus[:80],
+                scope_title,
+                0,
+                json.dumps(aggregate, ensure_ascii=False),
+                content,
+                "local",
+            ),
+        )
+        report_id = int(cursor.lastrowid)
+        for unit_id in unit_ids:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO wrong_analysis_states
+                    (unit_id, report_id, analyzed_session_id, analyzed_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (unit_id, report_id, retry_session_ids.get(unit_id, 0)),
+            )
+        connection.commit()
+        return {
+            "analysis": content,
+            "aggregate": aggregate,
+            "report_id": report_id,
+            "scope_title": scope_title,
+            "cached": False,
+            "locked": True,
+            "reanalyze_after_retry": True,
+        }
+
+    try:
+        diagnoses, _ = diagnose_wrong_answers(
+            connection,
+            question_ids,
+            previous_snapshot=previous_snapshot or None,
+            current_snapshot=input_snapshot,
+        )
+        aggregate = aggregate_diagnoses(diagnoses)
+        content = write_anonymous_report(connection, aggregate)
+        profile = get_ai_profile(connection)
+        cursor = connection.execute(
+            """
+            INSERT INTO wrong_analysis_reports
+                (scope_key, unit_ids, input_snapshot, scope_title,
+                 question_count, aggregate_data, report, model_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                scope_key,
+                json.dumps(unit_ids),
+                json.dumps(input_snapshot, ensure_ascii=False),
+                scope_title,
                 aggregate["question_count"],
                 json.dumps(aggregate, ensure_ascii=False),
                 content,
@@ -898,7 +1027,7 @@ def analyze_wrong(
                     (unit_id, report_id, analyzed_session_id, analyzed_at)
                 VALUES (?, ?, ?, CURRENT_TIMESTAMP)
                 """,
-                (unit_id, report_id, max_session_id),
+                (unit_id, report_id, retry_session_ids.get(unit_id, max_session_id)),
             )
         connection.commit()
     except (ValueError, LookupError, httpx.HTTPError, json.JSONDecodeError) as error:
@@ -907,7 +1036,7 @@ def analyze_wrong(
         "analysis": content,
         "aggregate": aggregate,
         "report_id": report_id,
-        "scope_title": request.scope_title,
+        "scope_title": scope_title,
         "cached": False,
         "locked": True,
         "reanalyze_after_retry": True,
@@ -944,14 +1073,11 @@ def wrong_analysis_status(
     for row in rows:
         if not report_unit_ids(row).issubset(allowed):
             continue
-        completed = connection.execute(
-            """
-            SELECT 1 FROM practice_unit_submissions
-            WHERE unit_id = ? AND session_id > ?
-            LIMIT 1
-            """,
-            (row["unit_id"], row["analyzed_session_id"]),
-        ).fetchone()
+        completed_session_id = _latest_completed_wrong_retry_session(
+            connection,
+            int(row["unit_id"]),
+            int(row["analyzed_session_id"]),
+        )
         try:
             aggregate = json.loads(row["aggregate_data"] or "{}")
         except json.JSONDecodeError:
@@ -962,8 +1088,8 @@ def wrong_analysis_status(
                 "report_id": int(row["report_id"]),
                 "scope_title": row["scope_title"],
                 "scope_key": row["scope_key"],
-                "locked": not bool(completed),
-                "can_reanalyze": bool(completed),
+                "locked": completed_session_id is None,
+                "can_reanalyze": completed_session_id is not None,
                 "report": row["report"],
                 "aggregate": aggregate,
             }
@@ -1043,9 +1169,10 @@ def list_question_labels(
     paper_ids: str = "",
     search: str = "",
     limit: int = 100,
+    question_bank_profile_id: int | None = None,
     connection: sqlite3.Connection = Depends(get_db),
 ) -> list[dict]:
-    conditions = ["u.unit_type <> 'listening'"]
+    conditions = ["u.unit_type <> 'listening'", "p.deleted_at IS NULL"]
     params: list = []
     if year is not None:
         conditions.append("p.year = ?")
@@ -1060,6 +1187,13 @@ def list_question_labels(
         raise HTTPException(422, "paper_ids 必须是逗号分隔的数字") from error
     if len(selected_paper_ids) > 100 or any(value <= 0 for value in selected_paper_ids):
         raise HTTPException(422, "paper_ids 最多包含 100 个正整数")
+    if question_bank_profile_id is not None or not selected_paper_ids:
+        try:
+            profile_id = _resolve_question_bank_profile_id(connection, question_bank_profile_id)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+        conditions.append("p.profile_id = ?")
+        params.append(profile_id)
     if selected_paper_ids:
         conditions.append(
             f"p.id IN ({','.join('?' for _ in selected_paper_ids)})"

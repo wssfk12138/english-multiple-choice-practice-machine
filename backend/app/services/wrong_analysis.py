@@ -101,6 +101,7 @@ def build_diagnostic_payload(
     connection: sqlite3.Connection,
     question_ids: list[int],
     previous_snapshot: dict[str, Any] | None = None,
+    current_snapshot: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     if not question_ids:
         return []
@@ -124,8 +125,17 @@ def build_diagnostic_payload(
         """,
         question_ids,
     ).fetchall()
+    current_errors_by_question = {
+        int(error["question_id"]): str(error.get("selected") or "")
+        for unit in (current_snapshot or {}).values()
+        if isinstance(unit, dict)
+        for error in unit.get("errors", [])
+        if isinstance(error, dict) and error.get("question_id")
+    }
     units: dict[int, dict[str, Any]] = {}
     for row in rows:
+        if current_snapshot is not None and int(row["id"]) not in current_errors_by_question:
+            continue
         unit = units.setdefault(
             row["unit_id"],
             {
@@ -165,6 +175,7 @@ def build_diagnostic_payload(
                 "stem": row["stem"],
                 "options": [dict(option) for option in options],
                 "correct_answer": row["answer"],
+                "current_wrong_answer": current_errors_by_question.get(row["id"]),
                 "attempt_count": row["attempt_count"],
                 "wrong_count": row["wrong_count"],
                 "history_newest_first": _question_history(connection, row["id"]),
@@ -178,9 +189,13 @@ def diagnose_wrong_answers(
     connection: sqlite3.Connection,
     question_ids: list[int],
     previous_snapshot: dict[str, Any] | None = None,
+    current_snapshot: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
     payload = build_diagnostic_payload(
-        connection, question_ids, previous_snapshot=previous_snapshot
+        connection,
+        question_ids,
+        previous_snapshot=previous_snapshot,
+        current_snapshot=current_snapshot,
     )
     if not payload:
         raise ValueError("没有可分析的错题记录")

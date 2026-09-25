@@ -762,16 +762,29 @@ def translate_vocabulary_entry(entry_id: int) -> None:
             _translate_vocabulary_batch(connection, _translation_rows(connection, [entry_id]))
 
 
-def review_entry(connection: sqlite3.Connection, entry_id: int, rating: str, expected_revision: str | None = None, *, mode: str = "scheduled") -> dict[str, Any]:
+class ConflictError(Exception):
+    """评分并发冲突或幂等命令被复用：路由层映射为 409。"""
+
+
+def review_entry(connection: sqlite3.Connection, entry_id: int, rating: str, expected_revision: str | None = None, *, mode: str = "scheduled", command_id: str = "") -> dict[str, Any]:
     # Acquire the writer lock before checking the revision; check and ledger write are atomic.
     connection.execute("BEGIN IMMEDIATE")
     try:
+        if command_id:
+            prior = connection.execute(
+                "SELECT entry_id, rating, mode FROM vocabulary_reviews WHERE sync_id = ? ORDER BY id DESC LIMIT 1",
+                (command_id,),
+            ).fetchone()
+            if prior:
+                if int(prior["entry_id"]) != entry_id or str(prior["rating"]) != rating or str(prior["mode"]) != mode:
+                    raise ConflictError("复习命令已用于其他评价")
+                return _serialize_entry(connection, entry_id)
         current = _serialize_entry(connection, entry_id)
         if expected_revision is not None and expected_revision != current["review_revision"]:
-            raise ValueError("复习记录已更新，请刷新当前单词后重新评分")
+            raise ConflictError("复习记录已更新，请刷新当前单词后重新评分")
         if rating == "mastered" and mode == "scheduled":
-            return _apply_legacy_review_entry(connection, entry_id, rating)
-        return _apply_review_entry(connection, entry_id, "fluent" if rating == "mastered" else rating, mode)
+            return _apply_legacy_review_entry(connection, entry_id, rating, command_id)
+        return _apply_review_entry(connection, entry_id, "fluent" if rating == "mastered" else rating, mode, command_id)
     except Exception:
         connection.rollback()
         raise
@@ -782,6 +795,7 @@ def _apply_review_entry(
     entry_id: int,
     rating: str,
     mode: str = "scheduled",
+    command_id: str = "",
 ) -> dict[str, Any]:
     if rating not in {"again", "hard", "know", "fluent"}:
         raise ValueError("无效的复习评价")
@@ -797,8 +811,8 @@ def _apply_review_entry(
     if mode == "reinforcement":
         # Extra practice is deliberately isolated from the formal SRS schedule.
         connection.execute(
-            "INSERT INTO vocabulary_reviews (entry_id, rating, mode, next_review_at) VALUES (?, ?, 'reinforcement', ?)",
-            (entry_id, rating, now.isoformat(timespec="seconds")),
+            "INSERT INTO vocabulary_reviews (entry_id, rating, mode, next_review_at, sync_id) VALUES (?, ?, 'reinforcement', ?, ?)",
+            (entry_id, rating, now.isoformat(timespec="seconds"), command_id or None),
         )
         connection.commit()
         return _serialize_entry(connection, entry_id)
@@ -829,15 +843,15 @@ def _apply_review_entry(
         ),
     )
     connection.execute(
-        "INSERT INTO vocabulary_reviews (entry_id, rating, mode, next_review_at) VALUES (?, ?, 'scheduled', ?)",
-        (entry_id, rating, next_review.isoformat(timespec="seconds")),
+        "INSERT INTO vocabulary_reviews (entry_id, rating, mode, next_review_at, sync_id) VALUES (?, ?, 'scheduled', ?, ?)",
+        (entry_id, rating, next_review.isoformat(timespec="seconds"), command_id or None),
     )
     connection.commit()
     return _serialize_entry(connection, entry_id)
 
 
 def _apply_legacy_review_entry(
-    connection: sqlite3.Connection, entry_id: int, rating: str
+    connection: sqlite3.Connection, entry_id: int, rating: str, command_id: str = "",
 ) -> dict[str, Any]:
     now = datetime.now()
     delays = {"again": 1, "hard": 3, "mastered": 7}
@@ -854,10 +868,10 @@ def _apply_legacy_review_entry(
     )
     connection.execute(
         """
-        INSERT INTO vocabulary_reviews (entry_id, rating, next_review_at)
-        VALUES (?, ?, ?)
+        INSERT INTO vocabulary_reviews (entry_id, rating, next_review_at, sync_id)
+        VALUES (?, ?, ?, ?)
         """,
-        (entry_id, rating, next_review.isoformat(timespec="seconds")),
+        (entry_id, rating, next_review.isoformat(timespec="seconds"), command_id or None),
     )
     connection.commit()
     return _serialize_entry(connection, entry_id)

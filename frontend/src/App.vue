@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import DesktopConfirm from './components/DesktopConfirm.vue'
-import { BookMarked, BookOpenText, Brain, CircleHelp, CloudDownload, FileUp, Home, Library, MessageCircle, Moon, RefreshCw, Settings, Sun } from 'lucide-vue-next'
-import { onMounted, ref } from 'vue'
+import AppDialogHost from './components/AppDialogHost.vue'
+import { BookMarked, BookOpenText, Brain, FileUp, Home, Library, MessageCircle, Moon, Settings2, Sun } from 'lucide-vue-next'
+import { onMounted } from 'vue'
 import { useRoute } from 'vue-router'
+import { useThemeState } from './composables/useThemeState'
 
 const route = useRoute()
-const dark = ref(false)
+const dark = useThemeState()
 function applyTheme() {
   document.documentElement.classList.toggle('dark', dark.value)
   localStorage.setItem('linjian-theme', dark.value ? 'dark' : 'light')
@@ -24,7 +25,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <DesktopConfirm />
+  <AppDialogHost />
   <div
     class="app-shell"
     :class="{ 'practice-shell': route.path.startsWith('/practice') }"
@@ -40,13 +41,10 @@ onMounted(() => {
         <RouterLink to="/wrong"><Brain :size="19" aria-hidden="true" /><span>错题本</span></RouterLink>
         <RouterLink to="/vocabulary"><BookMarked :size="19" aria-hidden="true" /><span>单词本</span></RouterLink>
         <RouterLink to="/imports"><FileUp :size="19" aria-hidden="true" /><span>导入题库</span></RouterLink>
-        <RouterLink to="/remote-question-banks"><CloudDownload :size="19" aria-hidden="true" /><span>远程题库</span></RouterLink>
         <RouterLink to="/assistant">
           <MessageCircle :size="19" aria-hidden="true" /><span>AI 学习助手</span>
         </RouterLink>
-        <RouterLink to="/settings"><Settings :size="19" aria-hidden="true" /><span>模型与设置</span></RouterLink>
-        <RouterLink to="/updates"><RefreshCw :size="19" aria-hidden="true" /><span>更新中心</span></RouterLink>
-        <RouterLink to="/help"><CircleHelp :size="19" aria-hidden="true" /><span>帮助与反馈</span></RouterLink>
+        <RouterLink to="/settings"><Settings2 :size="19" aria-hidden="true" /><span>设置</span></RouterLink>
       </nav>
       <div class="sidebar-note">
         <BookOpenText :size="18" />

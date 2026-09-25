@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { confirmDesktop } from '../services/desktopConfirm'
+import { confirmDialog } from '../platform/dialogs'
 import VocabularyMaintenance from '../components/VocabularyMaintenance.vue'
 import { preferDefaultProfile, profileDrafts, profileSaveStates, saveProfileDraft, flushProfileDraft, forgetProfileDraft, profileHasDraft, serializeProfileOperation, saveModelVisibility, retryModelVisibility, visibilitySaveStates, intendedModelVisibility } from '../services/profileDrafts'
 import '../desktop-settings.css'
@@ -231,7 +231,7 @@ async function setModelVisible(profile: AiProfile, model: AiModel) {
 async function setAllVisible(profile: AiProfile, visible: boolean) { await saveModelVisibility(profile.id, visible) }
 
 async function removeProfile(profile: AiProfile) {
-  if (!await confirmDesktop(`删除 API 配置“${profile.name}”？已保存的对话不会被删除。`)) return
+  if (!await confirmDialog({ title: '删除配置', message: `删除 API 配置“${profile.name}”？已保存的对话不会被删除。`, confirmLabel: '删除', danger: true })) return
   try {
     if (!await flushProfileDraft(profile.id)) return
     await serializeProfileOperation(() => del(`/ai/profiles/${profile.id}`))

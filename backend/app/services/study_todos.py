@@ -11,7 +11,7 @@ VOCABULARY_PROFILE_CONDITION = """EXISTS (SELECT 1 FROM vocabulary_occurrences v
 
 
 def frequent_question_ids(connection: sqlite3.Connection) -> list[int]:
-    return [int(row["question_id"]) for row in connection.execute("""SELECT w.question_id FROM wrong_stats w JOIN questions q ON q.id = w.question_id JOIN units u ON u.id = q.unit_id JOIN papers p ON p.id = u.paper_id WHERE p.profile_id = ? AND p.deleted_at IS NULL AND w.wrong_count > 0 AND (w.manually_frequent = 1 OR w.wrong_count >= 3 OR (json_array_length(w.recent_results) >= 5 AND (SELECT COUNT(*) FROM json_each(w.recent_results) WHERE value = 0) >= 3))""", (get_active_profile_id(connection),)).fetchall()]
+    return [int(row["question_id"]) for row in connection.execute("""SELECT w.question_id FROM wrong_stats w JOIN questions q ON q.id = w.question_id JOIN units u ON u.id = q.unit_id JOIN papers p ON p.id = u.paper_id WHERE p.profile_id = ? AND p.deleted_at IS NULL AND w.wrong_count > 0 AND EXISTS (SELECT 1 FROM wrong_current_questions wc WHERE wc.question_id = w.question_id AND wc.deleted_at IS NULL) AND (w.manually_frequent = 1 OR w.wrong_count >= 3 OR (json_array_length(w.recent_results) >= 5 AND (SELECT COUNT(*) FROM json_each(w.recent_results) WHERE value = 0) >= 3))""", (get_active_profile_id(connection),)).fetchall()]
 
 
 def study_todos(connection: sqlite3.Connection) -> dict:

@@ -11,10 +11,11 @@ LAN_SYNC_MAX_REQUEST_BYTES = 16 * 1024 * 1024
 
 
 class PracticeCreate(BaseModel):
-    mode: Literal["paper", "unit", "random", "wrong"]
+    mode: Literal["paper", "unit", "random", "wrong", "wrong_history"]
     paper_id: int | None = None
     unit_ids: list[int] = Field(default_factory=list)
     question_ids: list[int] = Field(default_factory=list)
+    history_round_id: int | None = None
     unit_type: str | None = None
     selection_scope: Literal["unit", "paper_unit_type"] = "unit"
     count: int = 1
@@ -223,12 +224,13 @@ class VocabularyUpdate(BaseModel):
 
 class VocabularyReview(BaseModel):
     expected_revision: str | None = Field(default=None, max_length=2048)
+    command_id: str | None = Field(default=None, max_length=32, pattern="^[a-f0-9]{32}$")
     rating: Literal["again", "hard", "mastered", "know", "fluent"]
     mode: Literal["scheduled", "reinforcement"] = "scheduled"
 
 
 class VocabularyEnrichmentRunRequest(BaseModel):
-    action: Literal["start", "pause", "resume", "retry"]
+    action: Literal["start", "pause", "resume", "retry", "inventory"]
 
 
 class LanSyncHandshake(BaseModel):

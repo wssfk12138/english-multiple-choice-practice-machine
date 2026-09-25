@@ -9,7 +9,7 @@ from typing import Any
 from ..database import get_active_profile_id
 from ..schemas import PracticeCreate
 from .questions import parse_json, serialize_unit
-from .practice_snapshots import read_snapshot, restore_unit, snapshot_grade, require_snapshot_choice, snapshot_choice_required
+from .practice_snapshots import read_snapshot, restore_unit, snapshot_grade, require_snapshot_choice, snapshot_choice_required, historical_retry_snapshot
 from .listening import listening_unit_has_audio_sql
 from .attempt_stats import aggregate
 
@@ -136,11 +136,11 @@ def _select_unit_ids(
     if request.mode == "wrong":
         query = """
             SELECT DISTINCT questions.unit_id
-            FROM wrong_stats
-            JOIN questions ON questions.id = wrong_stats.question_id
+            FROM wrong_current_questions
+            JOIN questions ON questions.id = wrong_current_questions.question_id
             JOIN units ON units.id = questions.unit_id
             JOIN papers ON papers.id = units.paper_id
-            WHERE wrong_stats.wrong_count > 0
+            WHERE wrong_current_questions.deleted_at IS NULL
               AND papers.profile_id = ?
               AND papers.deleted_at IS NULL
         """
@@ -160,6 +160,35 @@ def _select_unit_ids(
         ids = [row["unit_id"] for row in rows]
         random.shuffle(ids)
         return ids[: max(1, request.count)], request.paper_id
+
+    if request.mode == "wrong_history":
+        if not request.history_round_id:
+            raise ValueError("请选择一条错题记录")
+        row = connection.execute(
+            """
+            SELECT wrong_retry_rounds.unit_id, units.paper_id
+            FROM wrong_retry_rounds
+            JOIN units ON units.id = wrong_retry_rounds.unit_id
+            JOIN papers ON papers.id = units.paper_id
+            WHERE wrong_retry_rounds.id = ?
+              AND wrong_retry_rounds.deleted_at IS NULL
+              AND papers.profile_id = ?
+              AND papers.deleted_at IS NULL
+            """,
+            (request.history_round_id, active_profile_id),
+        ).fetchone()
+        if row is None:
+            raise LookupError("错题记录不存在")
+        remaining = connection.execute(
+            """
+            SELECT COUNT(*) AS count FROM wrong_retry_round_questions
+            WHERE round_id = ? AND is_correct = 0
+            """,
+            (request.history_round_id,),
+        ).fetchone()["count"]
+        if not remaining:
+            raise ValueError("历史错题没有剩余题目")
+        return [row["unit_id"]], row["paper_id"]
 
     raise ValueError("不支持的练习模式")
 
@@ -208,9 +237,9 @@ def create_session(
         rows = connection.execute(
             f"""
             SELECT questions.id, questions.unit_id
-            FROM wrong_stats
-            JOIN questions ON questions.id = wrong_stats.question_id
-            WHERE wrong_stats.wrong_count > 0
+            FROM wrong_current_questions
+            JOIN questions ON questions.id = wrong_current_questions.question_id
+            WHERE wrong_current_questions.deleted_at IS NULL
               AND questions.unit_id IN ({placeholders})
               {
                   f"AND questions.id IN ({','.join('?' for _ in request.question_ids)})"
@@ -219,6 +248,21 @@ def create_session(
               }
             """,
             [*unit_ids, *request.question_ids],
+        ).fetchall()
+        for row in rows:
+            only_by_unit.setdefault(row["unit_id"], set()).add(row["id"])
+    elif request.mode == "wrong_history":
+        rows = connection.execute(
+            """
+            SELECT questions.id, questions.unit_id
+            FROM wrong_retry_round_questions
+            JOIN wrong_retry_rounds ON wrong_retry_rounds.id = wrong_retry_round_questions.round_id
+            JOIN questions ON questions.id = wrong_retry_round_questions.question_id
+            WHERE wrong_retry_round_questions.round_id = ?
+              AND wrong_retry_round_questions.is_correct = 0
+              AND wrong_retry_rounds.deleted_at IS NULL
+            """,
+            (request.history_round_id,),
         ).fetchall()
         for row in rows:
             only_by_unit.setdefault(row["unit_id"], set()).add(row["id"])
@@ -231,7 +275,11 @@ def create_session(
             connection,
             unit_id,
             shuffle_options=request.shuffle_options,
-            only_question_ids=only_by_unit.get(unit_id) if request.mode == "wrong" else None,
+            only_question_ids=(
+                only_by_unit.get(unit_id)
+                if request.mode in {"wrong", "wrong_history"}
+                else None
+            ),
         )
         units.append(unit)
         for question in unit["questions"]:
@@ -247,6 +295,11 @@ def create_session(
                     json.dumps(question["option_order"], ensure_ascii=False),
                 ),
             )
+    inherited_snapshot = historical_retry_snapshot(connection, request.history_round_id, only_by_unit) if request.mode == 'wrong_history' else {}
+    if inherited_snapshot.get('revision'):
+        connection.execute('UPDATE practice_sessions SET content_snapshot=? WHERE id=?', (json.dumps(inherited_snapshot, ensure_ascii=False), session_id))
+        connection.commit()
+        return get_session(connection, session_id)
     _normalize_listening_audio(units)
     connection.commit()
     return {
@@ -320,7 +373,7 @@ def get_session(connection: sqlite3.Connection, session_id: int) -> dict[str, An
 
     units = []
     only_by_unit: dict[int, set[int]] = {}
-    if session["mode"] == "wrong":
+    if session["mode"] in {"wrong", "wrong_history"}:
         for row in answers:
             question = connection.execute(
                 "SELECT unit_id FROM questions WHERE id = ?", (row["question_id"],)
@@ -338,7 +391,7 @@ def get_session(connection: sqlite3.Connection, session_id: int) -> dict[str, An
             # practice response exposes only the user's answer and correctness.
             include_answers=False,
             only_question_ids=only_by_unit.get(unit_id)
-            if session["mode"] == "wrong"
+            if session["mode"] in {"wrong", "wrong_history"}
             else None,
         )
         for question in unit["questions"]:
@@ -492,9 +545,11 @@ def save_answer(
 def _grade_answer_rows(
     connection: sqlite3.Connection,
     rows: list[sqlite3.Row],
-) -> tuple[float, float]:
+    update_stats: bool = True,
+) -> tuple[float, float, list[dict[str, Any]]]:
     score = 0.0
     max_score = 0.0
+    results: list[dict[str, Any]] = []
     for row in rows:
         original_answer, original_score = snapshot_grade(connection, row)
         max_score += original_score
@@ -508,9 +563,12 @@ def _grade_answer_rows(
             "UPDATE practice_answers SET is_correct = ? WHERE id = ?",
             (int(is_correct), row["id"]),
         )
-        snapshot_session = connection.execute('SELECT content_snapshot FROM practice_sessions WHERE id=?', (row['session_id'],)).fetchone()
-        historical_content = bool(read_snapshot(snapshot_session['content_snapshot']).get('revision'))
-        if not already_graded and not historical_content:
+        results.append({
+            "question_id": int(row["question_id"]),
+            "user_answer": row["user_answer"],
+            "is_correct": is_correct,
+        })
+        if update_stats and not already_graded:
             session = connection.execute(
                 "SELECT sync_id FROM practice_sessions WHERE id=?", (row["session_id"],)
             ).fetchone()
@@ -533,7 +591,65 @@ def _grade_answer_rows(
                 f"UPDATE wrong_stats SET {', '.join(name + '=?' for name in values)} WHERE question_id=?",
                 [*values.values(), row["question_id"]],
             )
-    return score, max_score
+    return score, max_score, results
+
+
+
+def _add_current_wrong_questions(
+    connection: sqlite3.Connection, unit_id: int, results: list[dict[str, Any]]
+) -> None:
+    for result in results:
+        if result["is_correct"]:
+            continue
+        connection.execute(
+            """
+            INSERT INTO wrong_current_questions(unit_id, question_id, deleted_at)
+            VALUES (?, ?, NULL)
+            ON CONFLICT(unit_id, question_id) DO UPDATE SET deleted_at = NULL
+            """,
+            (unit_id, result["question_id"]),
+        )
+
+
+def _record_wrong_retry_round(
+    connection: sqlite3.Connection,
+    unit_id: int,
+    session_id: int,
+    results: list[dict[str, Any]],
+) -> None:
+    next_round = connection.execute(
+        "SELECT COALESCE(MAX(round_number), 0) + 1 AS value FROM wrong_retry_rounds WHERE unit_id = ?",
+        (unit_id,),
+    ).fetchone()["value"]
+    correct_count = sum(bool(result["is_correct"]) for result in results)
+    cursor = connection.execute(
+        """
+        INSERT INTO wrong_retry_rounds
+            (unit_id, session_id, round_number, question_count, correct_count, wrong_count)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (unit_id, session_id, next_round, len(results), correct_count, len(results) - correct_count),
+    )
+    round_id = cursor.lastrowid
+    connection.executemany(
+        """
+        INSERT INTO wrong_retry_round_questions(round_id, question_id, user_answer, is_correct)
+        VALUES (?, ?, ?, ?)
+        """,
+        [
+            (round_id, result["question_id"], result["user_answer"], int(result["is_correct"]))
+            for result in results
+        ],
+    )
+    connection.execute("DELETE FROM wrong_current_questions WHERE unit_id = ?", (unit_id,))
+    connection.executemany(
+        "INSERT INTO wrong_current_questions(unit_id, question_id, since_round_id) VALUES (?, ?, ?)",
+        [
+            (unit_id, result["question_id"], round_id)
+            for result in results
+            if not result["is_correct"]
+        ],
+    )
 
 
 def submit_unit(
@@ -585,7 +701,10 @@ def submit_unit(
             question_id=missing["question_id"],
             question_number=missing["number"],
         )
-    score, max_score = _grade_answer_rows(connection, rows)
+    historical_content = bool(read_snapshot(session['content_snapshot']).get('revision'))
+    score, max_score, results = _grade_answer_rows(connection, rows, update_stats=not historical_content)
+    if not historical_content:
+        _add_current_wrong_questions(connection, unit_id, results)
     connection.execute(
         """
         INSERT INTO practice_unit_submissions
@@ -642,7 +761,14 @@ def submit_session(
     score = 0.0
     max_score = 0.0
     for unit_id, unit_rows in rows_by_unit.items():
-        unit_score, unit_max_score = _grade_answer_rows(connection, unit_rows)
+        history_only = session["mode"] == "wrong_history" or bool(read_snapshot(session["content_snapshot"]).get("revision"))
+        unit_score, unit_max_score, results = _grade_answer_rows(
+            connection, unit_rows, update_stats=not history_only
+        )
+        if session["mode"] == "wrong" and not history_only:
+            _record_wrong_retry_round(connection, unit_id, session_id, results)
+        elif not history_only:
+            _add_current_wrong_questions(connection, unit_id, results)
         score += unit_score
         max_score += unit_max_score
         connection.execute(

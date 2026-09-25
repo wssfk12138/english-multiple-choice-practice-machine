@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { confirmDesktop } from '../services/desktopConfirm'
+import { confirmDialog } from '../platform/dialogs'
 import { computed, ref, toRefs } from 'vue'
 import { keyDraft } from '../services/keyDrafts'
 import { profileDrafts, serializeProfileOperation } from '../services/profileDrafts'
@@ -21,7 +21,7 @@ function keyMask(key: { mask?: string }) {
   return tail ? `···· ${tail}` : ''
 }
 async function edit(action: string, identity = '') {
-  if (action === 'delete' && !await confirmDesktop('删除此密钥？删除后需要重新添加。')) return
+  if (action === 'delete' && !await confirmDialog({ title: '删除密钥', message: '删除此密钥？删除后需要重新添加。', confirmLabel: '删除', danger: true })) return
   const alias = action === 'rename' ? drafts.value[identity] ?? props.profile.keys?.find(k => k.id === identity)?.name : name.value
   if (action === 'rename' && !alias?.trim()) { error.value = '请输入密钥名称，草稿尚未保存'; return }
   if (action === 'rename' && alias === props.profile.keys?.find(k => k.id === identity)?.name) return

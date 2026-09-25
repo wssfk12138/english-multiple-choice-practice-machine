@@ -40,7 +40,7 @@ onBeforeUnmount(() => { disposed = true; clearInterval(poll) })
         <button class="button" :disabled="busy || !status" @click="act('start')">扫描并补缺</button>
         <button class="button secondary" :disabled="busy || !status" @click="act(status.paused ? 'resume' : 'pause')">{{ status?.paused ? '继续补缺' : '暂停补缺' }}</button>
         <button class="button secondary" :disabled="busy || !status?.failed" @click="act('retry')">重试失败词条</button>
-        <RouterLink class="button secondary" to="/settings">检查模型配置</RouterLink>
+        <RouterLink class="button secondary" to="/settings/model">检查模型配置</RouterLink>
       </div>
       <p v-if="status?.failed" class="error" role="alert">{{ status.failed }} 个词条补缺失败，可重试失败词条或检查模型配置。</p>
       <p v-if="error" class="error" role="alert">{{ error }} <button class="button ghost" @click="refresh">重试</button></p>

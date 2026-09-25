@@ -107,26 +107,83 @@ def trash_import_job(connection: sqlite3.Connection, job_id: int) -> dict[str, A
 
 
 def trash_wrong_units(connection, unit_ids):
+    ids = sorted({int(unit_id) for unit_id in unit_ids if int(unit_id) > 0})
+    if not ids:
+        raise ValueError("请选择需要删除的篇目")
     profile_id = get_active_profile_id(connection)
     batch_id, purge_after = new_trash_batch()
     archived = 0
-    for unit_id in sorted(set(unit_ids)):
-        unit = connection.execute('SELECT u.title FROM units u JOIN papers p ON p.id=u.paper_id WHERE u.id=? AND p.profile_id=? AND p.deleted_at IS NULL', (unit_id, profile_id)).fetchone()
+    for unit_id in ids:
+        unit = connection.execute(
+            """
+            SELECT units.id, units.title
+            FROM units JOIN papers ON papers.id = units.paper_id
+            WHERE units.id = ? AND papers.profile_id = ?
+              AND papers.deleted_at IS NULL
+            """,
+            (unit_id, profile_id),
+        ).fetchone()
         if unit is None:
             continue
-        stats = [dict(row) for row in connection.execute('SELECT w.* FROM wrong_stats w JOIN questions q ON q.id=w.question_id WHERE q.unit_id=?', (unit_id,))]
-        state = connection.execute('SELECT * FROM wrong_analysis_states WHERE unit_id=?', (unit_id,)).fetchone()
-        if not stats and state is None:
-            continue
-        _trash_row(connection, batch_id=batch_id, resource_type='wrong_archive', resource_id=unit_id, resource_name=unit['title'], profile_id=profile_id, purge_after=purge_after, metadata={'stats':stats, 'state':dict(state) if state else None})
-        trash_id = connection.execute('SELECT last_insert_rowid()').fetchone()[0]
+        current = [
+            dict(row) for row in connection.execute(
+                "SELECT * FROM wrong_current_questions WHERE unit_id = ?",
+                (unit_id,),
+            ).fetchall()
+        ]
+        rounds = [
+            dict(row) for row in connection.execute(
+                "SELECT * FROM wrong_retry_rounds WHERE unit_id = ?",
+                (unit_id,),
+            ).fetchall()
+        ]
+        round_ids = [int(row["id"]) for row in rounds]
+        round_questions: list[dict[str, Any]] = []
+        if round_ids:
+            placeholders = ",".join("?" for _ in round_ids)
+            round_questions = [
+                dict(row) for row in connection.execute(
+                    f"SELECT * FROM wrong_retry_round_questions WHERE round_id IN ({placeholders})",
+                    round_ids,
+                ).fetchall()
+            ]
+        state_row = connection.execute(
+            "SELECT * FROM wrong_analysis_states WHERE unit_id = ?", (unit_id,)
+        ).fetchone()
+        _trash_row(
+            connection,
+            batch_id=batch_id,
+            resource_type="wrong_archive",
+            resource_id=unit_id,
+            resource_name=str(unit["title"]),
+            profile_id=profile_id,
+            purge_after=purge_after,
+            metadata={
+                "current": current,
+                "rounds": rounds,
+                "round_questions": round_questions,
+                "state": dict(state_row) if state_row else None,
+            },
+        )
+        trash_id = connection.execute("SELECT id FROM trash_entries WHERE deletion_batch_id=? AND resource_type='wrong_archive' AND resource_id=?", (batch_id, unit_id)).fetchone()[0]
         archive_reports(connection, unit_id, trash_id)
-        connection.execute('DELETE FROM wrong_stats WHERE question_id IN (SELECT id FROM questions WHERE unit_id=?)', (unit_id,))
-        connection.execute('DELETE FROM wrong_analysis_states WHERE unit_id=?', (unit_id,))
+        connection.execute(
+            "DELETE FROM wrong_current_questions WHERE unit_id = ?", (unit_id,)
+        )
+        connection.execute(
+            "DELETE FROM wrong_retry_rounds WHERE unit_id = ?", (unit_id,)
+        )
+        connection.execute(
+            "DELETE FROM wrong_analysis_states WHERE unit_id = ?", (unit_id,)
+        )
         archived += 1
-    if not archived:
-        raise ValueError('所选篇目不存在或已经删除')
-    return {'archived':archived, 'batch_id':batch_id, 'purge_after':purge_after}
+    if archived == 0:
+        raise ValueError("未选篇目不存在或已被删除")
+    return {
+        "archived": archived,
+        "batch_id": batch_id,
+        "purge_after": purge_after,
+    }
 
 
 def trash_profile(connection: sqlite3.Connection, profile_id: int) -> dict[str, Any]:
@@ -395,18 +452,65 @@ def _restore_one(
             """,
             (profile_id, previous_status, resource_id),
         )
-    elif resource_type == 'wrong_archive':
-        if not connection.execute('SELECT 1 FROM units WHERE id=?', (resource_id,)).fetchone():
-            raise ValueError('原篇目已永久删除，无法恢复错题')
-        metadata = json.loads(row['metadata'] or '{}')
-        for stat in metadata.get('stats', []):
-            columns = ('question_id','attempt_count','wrong_count','recent_results','consecutive_correct','manually_frequent','attempt_ledger','last_wrong_at','last_attempt_at')
-            # New attempts since deletion win; never overwrite newer practice.
-            connection.execute(f"INSERT OR IGNORE INTO wrong_stats ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})", tuple(stat.get(column) for column in columns))
-        state = metadata.get('state')
-        if state:
-            connection.execute('INSERT OR IGNORE INTO wrong_analysis_states(unit_id,report_id,analyzed_session_id,analyzed_at) VALUES(?,?,?,?)', (state['unit_id'],state['report_id'],state['analyzed_session_id'],state['analyzed_at']))
+    elif resource_type == "wrong_archive":
+        if connection.execute('SELECT 1 FROM units WHERE id=?', (resource_id,)).fetchone() is None:
+            raise ValueError('原篇目已被删除，无法恢复错题本')
         connection.execute('DELETE FROM wrong_analysis_hidden WHERE trash_id=?', (row['id'],))
+        metadata = json.loads(row["metadata"] or "{}")
+        restored_round_ids = {}
+        for retry_round in metadata.get("rounds", []):
+            columns = (
+                "id", "unit_id", "session_id", "round_number", "question_count",
+                "correct_count", "wrong_count", "submitted_at", "deleted_at",
+            )
+            old_id = retry_round['id']
+            if connection.execute('SELECT 1 FROM wrong_retry_rounds WHERE id=?', (old_id,)).fetchone():
+                retry_round['id'] = None
+            if connection.execute('SELECT 1 FROM wrong_retry_rounds WHERE unit_id=? AND round_number=?', (resource_id, retry_round['round_number'])).fetchone():
+                retry_round['round_number'] = connection.execute('SELECT COALESCE(MAX(round_number),0)+1 FROM wrong_retry_rounds WHERE unit_id=?', (resource_id,)).fetchone()[0]
+            cursor = connection.execute(
+                f"INSERT INTO wrong_retry_rounds ({','.join(columns)}) "
+                f"VALUES ({','.join('?' for _ in columns)})",
+                tuple(retry_round.get(column) for column in columns),
+            )
+            restored_round_ids[old_id] = cursor.lastrowid
+        for question in metadata.get("round_questions", []):
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO wrong_retry_round_questions
+                    (round_id, question_id, user_answer, is_correct)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    restored_round_ids.get(question.get("round_id"), question.get("round_id")), question.get("question_id"),
+                    question.get("user_answer", ""), question.get("is_correct", 0),
+                ),
+            )
+        for question in metadata.get("current", []):
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO wrong_current_questions
+                    (unit_id, question_id, since_round_id, deleted_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    question.get("unit_id"), question.get("question_id"),
+                    restored_round_ids.get(question.get("since_round_id"), question.get("since_round_id")), question.get("deleted_at"),
+                ),
+            )
+        state = metadata.get("state")
+        if state:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO wrong_analysis_states
+                    (unit_id, report_id, analyzed_session_id, analyzed_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    state.get("unit_id"), state.get("report_id"),
+                    state.get("analyzed_session_id", 0), state.get("analyzed_at"),
+                ),
+            )
     else:
         raise ValueError("不支持的回收站资源类型")
 

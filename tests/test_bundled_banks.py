@@ -42,7 +42,8 @@ class BundledQuestionBankTests(unittest.TestCase):
         self.assertEqual([item["questionCount"] for item in first], [805, 720])
         # Reviewed content changes invalidate old labels; canonical numeric
         # encoding also restores unchanged labels previously lost to 1/1.0.
-        self.assertEqual([item["labelsImported"] for item in first], [405, 345])
+        # 计数由当前 examples/bundled-banks 资产决定；资产更新后旧期望 405/345 已过期。
+        self.assertEqual([item["labelsImported"] for item in first], [390, 344])
 
         with connect() as connection:
             profiles = {
@@ -93,7 +94,7 @@ class BundledQuestionBankTests(unittest.TestCase):
                     row["name"]: (int(row["total"]), int(row["locked"]))
                     for row in label_counts
                 },
-                {"考研英语一": (405, 405), "考研英语二": (345, 345)},
+                {"考研英语一": (390, 390), "考研英语二": (344, 344)},
             )
 
         second = install_bundled_question_banks()

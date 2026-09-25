@@ -45,7 +45,7 @@ const fixture = function () {
   }
 }
 const entry = '(' + fixture.toString() + ')();' +
-  'import {createApp,reactive,h} from "vue";import View from "/src/views/' + (android ? 'AndroidUpdatesView' : 'UpdatesView') + '.vue";' +
+  'import {createApp,reactive,h} from "vue";import View from "/src/views/' + (android ? 'AndroidUpdatesView' : 'SyncSettingsView') + '.vue";' +
   'import Keys from "/src/components/NamedModelKeys.vue";import "/src/styles.css";import "/src/study-theme.css";' +
   'const profile=reactive({id:1,keys:[{id:"fixture-key",name:"Synthetic key",mask:"sk-f****abcd"}],selected_key_id:"fixture-key",has_api_key:true});' +
   'createApp({render:()=>h("main",[h(View),h("section",{class:"page"},[h(Keys,{profile})])])}).mount("#app");'

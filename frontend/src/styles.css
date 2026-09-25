@@ -278,6 +278,13 @@ h2, h3 { margin: 0; }
 .ordering-board { display:grid; gap:14px; }
 .ordering-section-heading { display:flex; align-items:baseline; justify-content:space-between; gap:10px; color:var(--ink); font-weight:700; }
 .ordering-section-heading small { color:var(--muted); font-size:12px; font-weight:500; }
+.ordering-fixed-slots { display:grid; gap:7px; padding:10px 12px; border:1px solid color-mix(in srgb,var(--primary) 18%,var(--line)); border-radius:10px; background:color-mix(in srgb,var(--primary-soft) 48%,var(--surface-solid)); }
+.ordering-fixed-caption { color:var(--muted); font-size:11px; font-weight:700; letter-spacing:.02em; }
+.ordering-fixed-chain { display:flex; flex-wrap:wrap; align-items:center; gap:4px 6px; color:var(--ink); font-size:14px; line-height:1.5; }
+.ordering-fixed-question,.ordering-fixed-label { display:inline-flex; align-items:center; justify-content:center; min-width:25px; min-height:25px; padding:2px 6px; border-radius:6px; }
+.ordering-fixed-question { color:var(--primary); background:color-mix(in srgb,var(--primary) 10%,var(--surface-solid)); }
+.ordering-fixed-label { color:var(--ink); background:var(--surface-solid); border:1px solid var(--line); }
+.ordering-slot-arrow { color:var(--muted); user-select:none; }
 .ordering-answer-list { display:grid; gap:8px; }
 .ordering-answer-row { display:grid; grid-template-columns:42px minmax(0,1fr); align-items:center; gap:8px 10px; padding:10px 0; border-bottom:1px solid var(--line); }
 .ordering-answer-row>strong { color:var(--primary); font-size:16px; text-align:center; }
@@ -936,3 +943,60 @@ input[type="file"]::file-selector-button {
   color: #98673e;
   background: var(--apricot);
 }
+
+/* ===== 自有主题化弹层（确认/输入）与选择弹层：只使用主题变量 ===== */
+.app-overlay { position: fixed; inset: 0; z-index: 240; display: grid; place-items: center; padding: 20px; background: rgba(23, 32, 28, .48); backdrop-filter: blur(5px); }
+.app-dialog { width: min(460px, 100%); max-height: min(86vh, 640px); overflow: auto; display: grid; gap: 14px; padding: 22px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface-solid); color: var(--ink); box-shadow: var(--shadow); }
+.app-dialog-head { display: flex; align-items: center; gap: 12px; }
+.app-dialog-head h2 { font-size: 19px; line-height: 1.4; }
+.app-dialog-icon { flex: none; width: 42px; height: 42px; display: grid; place-items: center; border-radius: 13px; background: var(--primary-soft); color: var(--primary); }
+.app-dialog-icon.danger { background: var(--danger-soft); color: var(--danger); }
+.app-dialog-body { display: grid; gap: 10px; }
+.app-dialog-body p { margin: 0; color: var(--muted); line-height: 1.7; overflow-wrap: anywhere; white-space: normal; }
+.app-dialog-actions { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+.app-dialog-actions .button { min-height: 48px; }
+.app-dialog-actions .button.danger { color: white; }
+@media (max-width: 600px) {
+  .app-overlay { padding: 14px; align-items: end; }
+  .app-dialog { width: 100%; }
+  .app-dialog-actions { flex-direction: row-reverse; }
+  .app-dialog-actions .button { flex: 1 1 46%; }
+}
+
+/* 主题化选择弹层：替代原生 <select>，带标题、关闭、搜索、选中标记和空结果。 */
+.option-sheet-trigger { min-height: 48px; width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-solid); color: var(--ink); text-align: left; }
+.option-sheet-trigger:disabled { opacity: .55; cursor: not-allowed; }
+.option-sheet-trigger .option-sheet-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.option-sheet-trigger .option-sheet-placeholder { color: var(--muted); }
+.option-sheet-trigger svg { flex: none; color: var(--muted); }
+.app-sheet-overlay { position: fixed; inset: 0; z-index: 241; display: flex; align-items: flex-end; justify-content: center; background: rgba(23, 32, 28, .48); backdrop-filter: blur(4px); }
+.app-sheet { width: min(560px, 100%); max-height: 82vh; display: flex; flex-direction: column; padding: 14px 14px calc(14px + env(safe-area-inset-bottom)); border: 1px solid var(--line); border-bottom: 0; border-radius: 20px 20px 0 0; background: var(--surface-solid); color: var(--ink); box-shadow: var(--shadow); }
+@media (min-width: 601px) {
+  .app-sheet-overlay { align-items: center; padding: 20px; }
+  .app-sheet { width: min(520px, 100%); max-height: min(78vh, 560px); border: 1px solid var(--line); border-radius: var(--radius-lg); padding-bottom: 14px; }
+}
+.app-sheet-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.app-sheet-head h3 { font-size: 17px; }
+.app-sheet-close { display: grid; place-items: center; width: 48px; height: 48px; margin: -6px -6px -6px 0; border: 0; border-radius: 12px; background: transparent; color: var(--muted); }
+.app-sheet-search { display: flex; align-items: center; gap: 8px; padding: 10px 2px; color: var(--muted); }
+.app-sheet-search input { flex: 1; min-height: 44px; border: 1px solid var(--line); border-radius: 11px; padding: 8px 12px; background: var(--surface-solid); color: var(--ink); }
+.app-sheet-head, .app-sheet-search { flex-shrink: 0; }
+.app-sheet-list { flex: 1; min-height: 0; overflow: auto; display: grid; grid-auto-rows: max-content; align-content: start; gap: 2px; padding-top: 6px; }
+.app-sheet-option { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px; padding: 10px 12px; border: 0; border-radius: 12px; background: transparent; color: var(--ink); text-align: left; }
+.app-sheet-option:disabled { opacity: .5; cursor: not-allowed; }
+.app-sheet-option:not(:disabled):hover, .app-sheet-option:not(:disabled):focus-visible { background: var(--primary-faint); }
+.app-sheet-option.selected { background: var(--primary-soft); }
+.app-sheet-option-copy { display: grid; gap: 2px; min-width: 0; flex: 1; line-height: 1.5; }
+.app-sheet-option-copy strong { font-weight: 600; overflow-wrap: anywhere; }
+.app-sheet-option-copy small { color: var(--muted); overflow-wrap: anywhere; white-space: normal; }
+.app-sheet-option-mark { flex: none; color: var(--primary); }
+.app-sheet-empty { padding: 26px 12px; text-align: center; color: var(--muted); line-height: 1.7; }
+
+
+/* 页头标题行：从安卓 styles.css 提取的核对子集（.page-title-row / .page-title-icon），桌面复用同一结构。 */
+.page-title-row { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.page-title-row h1 { margin-block: 0; min-width: 0; }
+.page-title-icon { width: 34px; height: 34px; flex: 0 0 34px; object-fit: contain; }
+.page-title-icon-lucide { display: grid; place-items: center; border-radius: 10px; color: var(--primary); background: var(--primary-soft); }
+.compact-page-head { margin-bottom: 20px; }
+.compact-page-head .page-title-row h1 { font-size: clamp(26px, 2.4vw, 32px); }
