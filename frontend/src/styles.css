@@ -58,7 +58,7 @@
 
 * { box-sizing: border-box; }
 html { min-width: 320px; }
-:root { --app-zoom: 1; --app-vh: calc(var(--app-vh) / var(--app-zoom)); --app-vw: calc(var(--app-vw) / var(--app-zoom)); }
+:root { --app-zoom: 1; --app-vh: 100vh; --app-vw: 100vw; }
 body { margin: 0; min-width: 320px; min-height: var(--app-vh); background:
   radial-gradient(circle at 80% 5%, rgba(222,235,228,.7), transparent 30%),
   var(--bg); color: var(--ink); }
