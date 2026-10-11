@@ -312,6 +312,7 @@ h2, h3 { margin: 0; }
 .match-chip.wrong { border-color: var(--danger); background: var(--danger-soft); }
 .match-result { margin-top: 9px; font-size: 13px; }
 .unanswered-banner { position:fixed; top:80px; left:50%; z-index:35; transform:translateX(-50%); max-width:min(560px,calc(100vw - 32px)); display:flex; align-items:center; gap:9px; padding:12px 16px; border:1px solid color-mix(in srgb,var(--danger) 34%,var(--line)); border-radius:13px; background:color-mix(in srgb,var(--danger-soft) 92%,var(--surface-solid)); color:var(--danger); box-shadow:var(--shadow); font-size:14px; font-weight:650; }
+.transfer-notice { margin:0 15px 12px; padding:12px 16px; border:1px solid color-mix(in srgb,var(--primary) 26%,var(--line)); border-radius:13px; background:var(--primary-soft); color:var(--primary); font-size:14px; font-weight:650; line-height:1.6; }
 .question-card.unanswered-focus,.candidate-card.unanswered-focus,.ordering-answer-row.unanswered-focus { border-radius:14px; animation:unanswered-pulse 1s ease 2; box-shadow:0 0 0 3px color-mix(in srgb,var(--danger) 24%,transparent); }
 @keyframes unanswered-pulse { 50% { background:color-mix(in srgb,var(--danger-soft) 65%,var(--surface-solid)); box-shadow:0 0 0 5px color-mix(in srgb,var(--danger) 20%,transparent); } }
 .practice-footer-summary { display:flex; align-items:center; gap:12px; color:var(--muted); font-size:13px; }

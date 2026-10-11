@@ -122,14 +122,57 @@ class PracticeSnapshotTests(unittest.TestCase):
         self.db.execute("UPDATE units SET passage='New passage'");self.db.commit()
         result=practice_snapshots.choose_snapshot(self.db,self.s,'restart')
         self.assertNotEqual(result['id'],self.s)
+        # 只有篇目材料（passage）变化，题目本身未修正 → 旧选择原样带入。
+        self.assertEqual(result['carried'],1);self.assertEqual(result['reset'],0);self.assertEqual(result['carried_submissions'],0)
         old=practice.get_session(self.db,self.s);new=practice.get_session(self.db,result['id'])
         self.assertEqual(old['units'][0]['questions'][0]['user_answer'],'A')
         self.assertEqual(old['units'][0]['passage'],'Old passage')
         self.assertEqual(new['units'][0]['passage'],'New passage')
-        self.assertEqual(new['units'][0]['questions'][0]['user_answer'],'')
+        self.assertEqual(new['units'][0]['questions'][0]['user_answer'],'A')
+        self.assertEqual(new['units'][0]['questions'][0]['option_order'],['A','B'])
+        self.assertIsNone(new['units'][0]['questions'][0].get('submission'))
         with self.assertRaisesRegex(ValueError,'已结束'): practice_snapshots.choose_snapshot(self.db,self.s,'restart')
         with self.assertRaisesRegex(ValueError,'已结束'): practice.submit_session(self.db,self.s)
         self.assertEqual(self.db.execute('SELECT COUNT(*) FROM practice_sessions').fetchone()[0],2)
+
+    def test_restart_carries_submitted_units_whole_and_resets_corrected_questions(self):
+        u2=self.db.execute("INSERT INTO units(paper_id,external_key,unit_type,title,sequence,passage) VALUES(?,'u2','reading','Text 2',2,'Second passage')",(self.p,)).lastrowid
+        q2=self.db.execute("INSERT INTO questions(unit_id,external_key,number,answer,score,sequence,stem) VALUES(?,'q2',2,'B',2,1,'Stem two')",(u2,)).lastrowid
+        for i,label in enumerate('AB'):
+            self.db.execute('INSERT INTO options(question_id,stable_key,original_label,content,sequence) VALUES(?,?,?,?,?)',(q2,label,label,'Opt '+label,i))
+        self.db.commit()
+        sid=practice.create_session(self.db,PracticeCreate(mode='paper',paper_id=self.p,shuffle_options=False,force_new=True))['id']
+        practice.save_answer(self.db,sid,self.q,'A',['A','B'])
+        practice.save_answer(self.db,sid,q2,'B',['A','B'])
+        self.db.commit()
+        practice.submit_unit(self.db,sid,self.u)
+        practice_snapshots.capture_session(self.db,sid,'upgrade')
+        # 修正未提交篇目的题目答案（已提交篇目保持原样）。
+        self.db.execute("UPDATE questions SET answer='C' WHERE id=?",(q2,));self.db.commit()
+        attempts_before=self.db.execute('SELECT COUNT(*) FROM wrong_stats').fetchone()[0]
+        result=practice_snapshots.choose_snapshot(self.db,sid,'restart')
+        self.assertEqual(result['carried'],1);self.assertEqual(result['reset'],1);self.assertEqual(result['carried_submissions'],1)
+        new=practice.get_session(self.db,result['id'])
+        submitted=[unit for unit in new['units'] if unit['title']=='Text'][0]
+        carried=[unit for unit in new['units'] if unit['title']=='Text 2'][0]
+        # 已提交篇目：原样带入选择、判分结果与成绩，不按新答案重判。
+        self.assertEqual(submitted['questions'][0]['user_answer'],'A')
+        self.assertIsNotNone(submitted.get('submission'))
+        self.assertEqual(submitted['questions'][0].get('is_correct'),True)
+        # 被修正的题重置为未作答。
+        self.assertEqual(carried['questions'][0]['user_answer'],'')
+        self.assertEqual(carried['questions'][0]['option_order'],['A','B'])
+        submission=self.db.execute('SELECT score,max_score,submitted_at FROM practice_unit_submissions WHERE session_id=? AND unit_id=?',(result['id'],self.u)).fetchone()
+        self.assertIsNotNone(submission)
+        original=self.db.execute('SELECT score,max_score,submitted_at FROM practice_unit_submissions WHERE session_id=? AND unit_id=?',(sid,self.u)).fetchone()
+        self.assertEqual(submission['score'],original['score']);self.assertEqual(submission['max_score'],original['max_score'])
+        self.assertEqual(submission['submitted_at'],original['submitted_at'])
+        # 迁移只搬运数据：wrong_stats 不新增尝试计数，wrong 队列零变化。
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM wrong_stats').fetchone()[0],attempts_before)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM wrong_current_questions').fetchone()[0],0)
+        # 非整卷继续路径不受影响：旧会话 abandoned 且数据原样。
+        self.assertEqual(self.db.execute("SELECT status FROM practice_sessions WHERE id=?",(sid,)).fetchone()[0],'abandoned')
+        self.assertEqual(self.db.execute('SELECT user_answer FROM practice_answers WHERE session_id=? AND question_id=?',(sid,q2)).fetchone()[0],'B')
 
     def test_corrected_content_rejects_new_legacy_sessions(self):
         self.db.execute('UPDATE units SET shared_data=? WHERE id=?',(json.dumps({'content_revision':'r1'}),self.u))

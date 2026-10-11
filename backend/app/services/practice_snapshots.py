@@ -120,6 +120,53 @@ def require_snapshot_choice(session) -> None:
     if snapshot_choice_required(session):
         raise ValueError('题库内容已修正，请先选择继续旧内容或用修正版重开')
 
+def _normalized(value: Any) -> Any:
+    if isinstance(value, bool):
+        # Python bool is an int subclass, but JSON booleans are not numbers.
+        return ('boolean', value)
+    if value is None or isinstance(value, str):
+        return value
+    if isinstance(value, (int, float)):
+        # Native equality already accepts 2 == 2.0 without rounding large ints.
+        return value
+    if isinstance(value, list):
+        return [_normalized(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _normalized(value[key]) for key in sorted(value)}
+    return value
+
+def _question_material(payload: dict) -> Any:
+    """Scoring material that must match before an old selection can be carried.
+
+    Display labels and option order are runtime-generated; options are aligned
+    by stable_key, so only key/content/metadata participate. option_order is
+    excluded on purpose — a carried row keeps the order the user originally saw.
+    """
+    options = sorted(
+        (
+            {
+                'key': option.get('stable_key'),
+                'content': option.get('content') or '',
+                'metadata': _normalized(option.get('metadata') or {}),
+            }
+            for option in payload.get('options') or []
+            if isinstance(option, dict)
+        ),
+        key=lambda option: option['key'] or '',
+    )
+    return _normalized({
+        'number': payload.get('number'),
+        'stem': payload.get('stem') or '',
+        'question_type': payload.get('question_type') or '',
+        'score': payload.get('score'),
+        'metadata': _normalized(payload.get('metadata') or {}),
+        'options': options,
+    })
+
+def _snapshot_question_unchanged(saved: dict, current: dict, current_answer: Any) -> bool:
+    return _question_material(saved.get('payload') or {}) == _question_material(current) \
+        and saved.get('answer') == current_answer
+
 def choose_snapshot(connection: sqlite3.Connection, session_id: int, choice: str) -> dict:
     from .questions import serialize_unit
     if choice not in {'continue', 'restart'}:
@@ -138,13 +185,53 @@ def choose_snapshot(connection: sqlite3.Connection, session_id: int, choice: str
         new_id = connection.execute("INSERT INTO practice_sessions(mode,paper_id,unit_ids,shuffle_options,candidate_policy_version,updated_at) VALUES(?,?,?,?,1,CURRENT_TIMESTAMP)",
             (session['mode'],session['paper_id'],session['unit_ids'],session['shuffle_options'])).lastrowid
         connection.execute('UPDATE practice_sessions SET content_revisions=? WHERE id=?',(current_content_revisions(connection,json.loads(session['unit_ids'])),new_id))
+        # 转移口径（仅 paper 模式）：已提交篇目整体原样带入——成绩是历史事实，
+        # 不因迁移重判；未提交篇目逐题比对快照材料与当前内容，未修正的题保留
+        # 旧选择（判分键一致，结果不变），被修正的题重置给用户重做。
+        transfer = session['mode'] == 'paper'
+        submitted_units = {row['unit_id'] for row in connection.execute(
+            'SELECT unit_id FROM practice_unit_submissions WHERE session_id=?', (session_id,))} if transfer else set()
+        carried = 0
+        reset = 0
         for unit_id in json.loads(session['unit_ids']):
-            selected = {r[0] for r in connection.execute('SELECT a.question_id FROM practice_answers a JOIN questions q ON q.id=a.question_id WHERE a.session_id=? AND q.unit_id=?',(session_id,unit_id))}
-            unit = serialize_unit(connection,unit_id,shuffle_options=bool(session['shuffle_options']),only_question_ids=selected)
+            old_answers = connection.execute(
+                'SELECT a.question_id, a.user_answer, a.option_order, a.is_correct, q.external_key, q.answer AS current_answer'
+                ' FROM practice_answers a JOIN questions q ON q.id=a.question_id WHERE a.session_id=? AND q.unit_id=?',
+                (session_id, unit_id)).fetchall()
+            old_by_question = {row['question_id']: row for row in old_answers}
+            unit = serialize_unit(connection, unit_id, shuffle_options=bool(session['shuffle_options']), only_question_ids=set(old_by_question))
+            unit_key = connection.execute('SELECT external_key FROM units WHERE id=?', (unit_id,)).fetchone()[0]
+            saved_unit = next((item for item in snapshot['units'] if item['unit_key'] == unit_key), None)
+            carry_whole_unit = unit_id in submitted_units
             for question in unit['questions']:
-                connection.execute("INSERT INTO practice_answers(session_id,question_id,user_answer,option_order,updated_at) VALUES(?,?,'',?,CURRENT_TIMESTAMP)",(new_id,question['id'],json.dumps(question['option_order'])))
+                old = old_by_question.get(question['id'])
+                has_answer = bool(old and str(old['user_answer'] or '').strip())
+                saved = next((item for item in (saved_unit or {}).get('questions', [])
+                              if item['question_key'] == old['external_key']), None) if old else None
+                if transfer and old and (carry_whole_unit or (has_answer and saved and _snapshot_question_unchanged(saved, question, old['current_answer']))):
+                    connection.execute(
+                        "INSERT INTO practice_answers(session_id,question_id,user_answer,option_order,is_correct,updated_at)"
+                        " VALUES(?,?,?,?,?,CURRENT_TIMESTAMP)",
+                        (new_id, question['id'], old['user_answer'] or '', old['option_order'] or '[]',
+                         old['is_correct'] if carry_whole_unit else None))
+                    carried += 1
+                else:
+                    connection.execute(
+                        "INSERT INTO practice_answers(session_id,question_id,user_answer,option_order,updated_at) VALUES(?,?,'',?,CURRENT_TIMESTAMP)",
+                        (new_id, question['id'], json.dumps(question['option_order'])))
+                    # 只有原本作答过、因修正被清掉的题才计入“需重做”；建会话时就存在的空行不算。
+                    if has_answer:
+                        reset += 1
+        carried_submissions = 0
+        for submission in connection.execute(
+                'SELECT unit_id, submitted_at, score, max_score FROM practice_unit_submissions WHERE session_id=?',
+                (session_id,)).fetchall():
+            connection.execute(
+                'INSERT INTO practice_unit_submissions(session_id,unit_id,submitted_at,score,max_score) VALUES(?,?,?,?,?)',
+                (new_id, submission['unit_id'], submission['submitted_at'], submission['score'], submission['max_score']))
+            carried_submissions += 1
         connection.execute("UPDATE practice_sessions SET status='abandoned',updated_at=CURRENT_TIMESTAMP WHERE id=?",(session_id,))
-        return {'id':new_id}
+        return {'id':new_id, 'carried':carried, 'reset':reset, 'carried_submissions':carried_submissions}
 
 def historical_retry_snapshot(connection, round_id: int, selected: dict[int, set[int]]) -> dict:
     source = connection.execute('SELECT s.content_snapshot FROM wrong_retry_rounds r JOIN practice_sessions s ON s.id=r.session_id WHERE r.id=? AND r.deleted_at IS NULL', (round_id,)).fetchone()

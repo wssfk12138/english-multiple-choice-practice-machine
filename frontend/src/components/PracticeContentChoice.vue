@@ -7,7 +7,7 @@ defineEmits<{choose: [choice: 'continue' | 'restart']}>()
     <h2 id="content-choice-title">这份练习的题库内容已修正</h2>
     <p>原作答记录和评分会保留。请选择本次如何继续：</p>
     <button class="button" :disabled="busy" @click="$emit('choose', 'restart')">用修正版重新练习</button>
-    <p>使用修正后的内容，从相同题目范围重新作答。</p>
+    <p>使用修正后的内容继续作答；未受修正影响的题目会保留你的选择，有改动的题目需重新作答。</p>
     <button class="button secondary" :disabled="busy" @click="$emit('choose', 'continue')">继续原来的练习</button>
     <p>继续使用旧内容、原选项顺序及原评分依据，其中可能仍含已发现的错误。本次成绩保留在原练习中，不更新修正版的错题统计与复习队列。</p>
     <p v-if="error" role="alert">{{ error }}</p>

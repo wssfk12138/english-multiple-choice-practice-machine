@@ -440,6 +440,7 @@ function finishTimer() {
 const contentChoiceSessionId = ref<number | null>(null)
 const contentChoiceBusy = ref(false)
 const contentChoiceError = ref('')
+const contentChoiceNotice = ref('')
 async function chooseContent(choice: 'continue' | 'restart') {
   if (contentChoiceBusy.value || contentChoiceSessionId.value === null) return
   contentChoiceBusy.value = true
@@ -448,6 +449,9 @@ async function chooseContent(choice: 'continue' | 'restart') {
     const result: any = await post('/practice/sessions/' + contentChoiceSessionId.value + '/content-choice', {choice})
     if (Number(route.params.id) !== Number(result.id)) await router.replace('/practice/' + result.id)
     await load()
+    if (result.carried !== undefined) {
+      contentChoiceNotice.value = `已保留 ${Number(result.carried) || 0} 题作答，${Number(result.reset) || 0} 题因内容修正需重做；${Number(result.carried_submissions) || 0} 篇已提交成绩原样带入。`
+    }
   } catch (e) { contentChoiceError.value = String(e) }
   finally { contentChoiceBusy.value = false }
 }
@@ -831,6 +835,7 @@ async function copySelectedTerm() {
       </div>
     </header>
     <div v-if="error" class="warning" style="margin:15px">{{ error }}</div>
+    <div v-if="contentChoiceNotice" class="transfer-notice" role="status">{{ contentChoiceNotice }}</div>
     <div v-if="unansweredNotice" class="unanswered-banner" role="alert">
       <AlertCircle :size="18" />{{ unansweredNotice }}
     </div>
