@@ -100,7 +100,7 @@
 ## 执行状态（随批更新）
 
 - 2026-10-11 方案制定；同日前置工作：Android 树身份修复已提交 `a8282d7`、文档 `7b29bc3`。
-- 批次 A：已完成（内测树，公测树已同步同批改动并复跑门禁）。后端 `choose_snapshot` restart 分支按携带/重置/提交带入重写并返回计数；前端弹窗文案与结果提示条（`.transfer-notice`）落地；`tests/test_practice_snapshots.py` 10/10、全量 309 过/1 既有跳过；浏览器验收 `frontend/tests/practice-content-transfer.mjs`（真实 PracticeView 挂载 + 合成会话，浅/深色 1280×800 截图于 work-logs/batchA-shots）。公测树已同步。
-- 批次 B：未开始。
+- 批次 A：已完成（内测树）。后端 `choose_snapshot` restart 分支按携带/重置/提交带入重写并返回计数；前端弹窗文案与结果提示条（`.transfer-notice`）落地；`tests/test_practice_snapshots.py` 10/10、全量 309 过/1 既有跳过；浏览器验收 `frontend/tests/practice-content-transfer.mjs`（真实 PracticeView 挂载 + 合成会话，浅/深色 1280×800 截图于 work-logs/batchA-shots）。公测树已同步。
+- 批次 B：已完成（内测树，公测树已同步同批改动并复跑门禁）。`services/practiceTimer.ts` 状态机原样移植（单调时钟、暂停原因、v2 快照、legacy 迁移）；PracticeView 换用 performance.now() + 每 5 秒检查点 + 可见性自动暂停/恢复 + 路由离开结算（abandon-if-empty）+ 提交前冻结（整卷/分篇，失败按前台条件恢复）；休息遮罩仅手动暂停显示；ListeningPlayer 对齐平板防绕过语义（暂停期禁播放、清延迟自动播放、切轨不排队）。状态机测试 `practice-timer.mjs` 6/6、浏览器验收 `practice-timer-ui.mjs` 四场景通过、全量 309 过、构建过。桌面适配两处：检查点沿用前端本地存储（桌面单机可靠，未加后端字段）；自动暂停回前台自动续计、手动休息需显式继续（与平板一致，修正方案初稿中"恢复可见不自动续计"的表述）。公测树已同步。
 - 批次 C：未开始。
 - 批次 D：未开始。

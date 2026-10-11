@@ -17,6 +17,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { get, post, put } from '../api'
 import { confirmDialog } from '../platform/dialogs'
+import { createTimer, elapsedTimer, checkpointTimer, pauseTimerState, resumeTimerState, finishTimerState, timerSnapshot, restoreTimer, type PracticeTimerState, type TimerPauseReason } from '../services/practiceTimer'
 import PracticeContentChoice from '../components/PracticeContentChoice.vue'
 import ContentBlocks from '../components/ContentBlocks.vue'
 import PassageBlank from '../components/PassageBlank.vue'
@@ -42,16 +43,17 @@ const currentWordBankQuestionId = ref<number | null>(null)
 type VocabularyTranslationTrigger = 'unit_submit' | 'session_submit' | 'practice_exit'
 type PendingVocabularyRecord = { entryId: number, unitId: number | null }
 const pendingVocabulary = ref<PendingVocabularyRecord[]>([])
-type TimerMode = 'off' | 'running' | 'paused' | 'finished'
-type PracticeTimerState = {
-  mode: TimerMode
-  elapsedMs: number
-  startedAt: number | null
-}
 const timerState = ref<PracticeTimerState | null>(null)
 const timerPromptVisible = ref(false)
-const timerNow = ref(Date.now())
+const timerNow = ref(performance.now())
+const timerNotice = ref('')
+const timerSaveError = ref('')
+const pageForeground = ref(document.visibilityState === 'visible')
+const pageLeaving = ref(false)
+const submissionBusy = ref(false)
 let timerTicker: number | null = null
+let checkpointAt = 0
+let timerBackupBlocked = false
 const activeUnit = computed(() => session.value?.units?.[activeUnitIndex.value])
 const activeContentBlocks = computed(() => activeUnit.value?.content_blocks || [])
 const clozeBlankNumbers = computed<number[]>(() => activeUnit.value?.unit_type === 'cloze'
@@ -105,17 +107,14 @@ const orderingFixedSlots = computed(() => {
   const slots = activeUnit.value?.shared_data?.fixed_slots
   return Array.isArray(slots) ? slots : []
 })
-const timerElapsedMs = computed(() => {
-  const state = timerState.value
-  if (!state) return 0
-  if (state.mode === 'running' && state.startedAt) {
-    return state.elapsedMs + Math.max(0, timerNow.value - state.startedAt)
-  }
-  return state.elapsedMs
-})
+const timerElapsedMs = computed(() => elapsedTimer(timerState.value, timerNow.value))
 const timerText = computed(() => formatDuration(timerElapsedMs.value))
 const timerEnabled = computed(() =>
   Boolean(timerState.value && timerState.value.mode !== 'off'),
+)
+const timerReady = computed(() =>
+  pageForeground.value && !pageLeaving.value && !submissionBusy.value
+  && contentChoiceSessionId.value === null,
 )
 const activeUnitSubmitted = computed(() =>
   Boolean(activeUnit.value?.submission?.submitted || session.value?.status === 'submitted'),
@@ -231,10 +230,16 @@ function formatScore(value: unknown) {
 
 function persistTimer() {
   if (!session.value?.id || !timerState.value) return
-  localStorage.setItem(
-    timerStorageKey(session.value.id),
-    JSON.stringify(timerState.value),
-  )
+  if (timerBackupBlocked) return
+  try {
+    localStorage.setItem(
+      timerStorageKey(session.value.id),
+      JSON.stringify(timerSnapshot(timerState.value, performance.now())),
+    )
+    timerSaveError.value = ''
+  } catch {
+    timerSaveError.value = '计时保存失败；异常关闭可能丢失尚未保存的用时，请保持页面打开并检查存储。'
+  }
 }
 
 function vocabularyQueueKey(sessionId: number) {
@@ -313,6 +318,7 @@ async function flushVocabularyTranslations(
 }
 
 function flushVocabularyOnPageHide() {
+  pausePracticeAutomatically()
   const entryIds = [...new Set(pendingVocabulary.value.map(item => item.entryId))]
   if (!entryIds.length) return
   void fetch('/api/vocabulary/translation-runs', {
@@ -326,71 +332,63 @@ function flushVocabularyOnPageHide() {
   }).catch(() => undefined)
 }
 
-function readTimer(sessionId: number): PracticeTimerState | null {
-  try {
-    const raw = localStorage.getItem(timerStorageKey(sessionId))
-    if (!raw) return null
-    const parsed = JSON.parse(raw)
-    if (!['off', 'running', 'paused', 'finished'].includes(parsed.mode)) return null
-    return {
-      mode: parsed.mode,
-      elapsedMs: Math.max(0, Number(parsed.elapsedMs) || 0),
-      startedAt: Number.isFinite(Number(parsed.startedAt))
-        ? Number(parsed.startedAt)
-        : null,
-    }
-  } catch {
-    return null
+function flushVocabularyOnVisibilityChange() {
+  pageForeground.value = document.visibilityState === 'visible'
+  if (!pageForeground.value) {
+    pausePracticeAutomatically()
+  } else {
+    resumeAutomaticTimer()
   }
 }
 
 function initializeTimer() {
   if (!session.value) return
-  const saved = readTimer(session.value.id)
-  if (session.value.status === 'submitted') {
-    timerPromptVisible.value = false
-    if (!saved) return
-    if (saved.mode === 'running' && saved.startedAt) {
-      const submittedAt = session.value.submitted_at
-        ? Date.parse(`${String(session.value.submitted_at).replace(' ', 'T')}Z`)
-        : Date.now()
-      saved.elapsedMs += Math.max(0, submittedAt - saved.startedAt)
-      saved.startedAt = null
-      saved.mode = 'finished'
-      timerState.value = saved
-      persistTimer()
+  timerNotice.value = ''
+  timerSaveError.value = ''
+  timerBackupBlocked = false
+  let raw: string | null = null
+  try { raw = localStorage.getItem(timerStorageKey(session.value.id)) }
+  catch { timerSaveError.value = '计时记录读取失败，无法恢复上次用时。' }
+  const saved = restoreTimer(raw, session.value.status === 'submitted')
+  timerNotice.value = saved.notice
+  if (saved.backup && raw !== null) {
+    try {
+      const key = timerStorageKey(session.value.id) + '-legacy-backup'
+      if (localStorage.getItem(key) === null) localStorage.setItem(key, raw.slice(0, 16384))
+    } catch {
+      timerBackupBlocked = true
+      timerSaveError.value = '旧计时记录备份失败；原记录未覆盖，本次计时暂不能保存。'
+      timerState.value = saved.state
+      timerPromptVisible.value = !saved.state && session.value.status !== 'submitted'
       return
     }
-    timerState.value = saved
-    return
   }
-  if (saved) {
-    timerState.value = saved
+  timerState.value = saved.state
+  if (session.value.status === 'submitted') {
     timerPromptVisible.value = false
-  } else if (session.value.units?.some((unit: any) => unit.submission?.submitted)) {
-    timerState.value = { mode: 'off', elapsedMs: 0, startedAt: null }
+  } else if (saved.state) {
     timerPromptVisible.value = false
-    persistTimer()
+  } else if (raw === null && session.value.units?.some((unit: any) => unit.submission?.submitted)) {
+    timerState.value = { ...createTimer(), mode: 'off', pauseReason: null }
+    timerPromptVisible.value = false
   } else {
-    timerState.value = null
     timerPromptVisible.value = true
   }
+  // Unknown/corrupt snapshots stay intact until the user chooses a new timer.
+  if (timerState.value) persistTimer()
 }
 
 function startTimedPractice() {
-  timerNow.value = Date.now()
-  timerState.value = {
-    mode: 'running',
-    elapsedMs: 0,
-    startedAt: timerNow.value,
-  }
+  timerNow.value = performance.now()
+  timerState.value = resumeTimerState(createTimer(), timerNow.value, timerReady.value, true)
   timerPromptVisible.value = false
+  checkpointAt = timerNow.value
   persistTimer()
   resetPracticeScroll()
 }
 
 function startWithoutTimer() {
-  timerState.value = { mode: 'off', elapsedMs: 0, startedAt: null }
+  timerState.value = { ...createTimer(), mode: 'off', pauseReason: null }
   timerPromptVisible.value = false
   persistTimer()
   resetPracticeScroll()
@@ -402,38 +400,36 @@ function resetPracticeScroll() {
   document.documentElement.scrollTop = 0
 }
 
-function pauseTimer() {
-  const state = timerState.value
-  if (!state || state.mode !== 'running' || !state.startedAt) return
-  const now = Date.now()
-  state.elapsedMs += Math.max(0, now - state.startedAt)
-  state.startedAt = null
-  state.mode = 'paused'
-  timerNow.value = now
-  listeningPlayer.value?.pause()
+function pausePracticeTimer(reason: TimerPauseReason) {
+  timerNow.value = performance.now()
+  if (timerState.value) timerState.value = pauseTimerState(timerState.value, timerNow.value, reason)
+  listeningPlayer.value?.pause(reason === 'manual')
   persistTimer()
 }
-
+function pausePracticeAutomatically() { pausePracticeTimer('automatic') }
+function pauseTimer() { pausePracticeTimer('manual') }
+function resumeAutomaticTimer() {
+  if (!timerState.value) return
+  timerNow.value = performance.now()
+  const next = resumeTimerState(timerState.value, timerNow.value, timerReady.value)
+  if (next !== timerState.value) { timerState.value = next; persistTimer() }
+}
 function resumeTimer() {
-  const state = timerState.value
-  if (!state || state.mode !== 'paused') return
-  const now = Date.now()
-  state.startedAt = now
-  state.mode = 'running'
-  timerNow.value = now
+  if (!timerState.value || submissionBusy.value) return
+  timerNow.value = performance.now()
+  timerState.value = resumeTimerState(timerState.value, timerNow.value, timerReady.value, true)
   persistTimer()
 }
-
 function finishTimer() {
-  const state = timerState.value
-  if (!state || state.mode === 'off' || state.mode === 'finished') return
-  if (state.mode === 'running' && state.startedAt) {
-    const now = Date.now()
-    state.elapsedMs += Math.max(0, now - state.startedAt)
-    timerNow.value = now
+  if (timerState.value) timerState.value = finishTimerState(timerState.value, performance.now())
+  persistTimer()
+}
+function releaseSubmissionTimer(wasRunning: boolean) {
+  submissionBusy.value = false
+  if (wasRunning && timerState.value?.mode === 'paused') {
+    timerState.value = pauseTimerState(timerState.value, performance.now(), 'automatic')
+    resumeAutomaticTimer()
   }
-  state.startedAt = null
-  state.mode = 'finished'
   persistTimer()
 }
 
@@ -474,16 +470,39 @@ async function load() {
 }
 onMounted(() => {
   timerTicker = window.setInterval(() => {
-    timerNow.value = Date.now()
+    timerNow.value = performance.now()
+    if (timerState.value?.mode === 'running' && timerNow.value - checkpointAt >= 5000) {
+      timerState.value = checkpointTimer(timerState.value, timerNow.value)
+      persistTimer()
+      checkpointAt = timerNow.value
+    }
   }, 500)
   window.addEventListener('keydown', handleWindowKeydown)
   window.addEventListener('pagehide', flushVocabularyOnPageHide)
+  document.addEventListener('visibilitychange', flushVocabularyOnVisibilityChange)
   load()
 })
 onBeforeUnmount(() => {
+  pausePracticeAutomatically()
   if (timerTicker !== null) window.clearInterval(timerTicker)
   window.removeEventListener('keydown', handleWindowKeydown)
   window.removeEventListener('pagehide', flushVocabularyOnPageHide)
+  document.removeEventListener('visibilitychange', flushVocabularyOnVisibilityChange)
+})
+onBeforeRouteLeave(async () => {
+  pageLeaving.value = true
+  pausePracticeAutomatically()
+  await flushVocabularyTranslations('practice_exit')
+  const current = session.value
+  if (current && current.mode === 'paper' && current.status === 'active') {
+    const sid = Number(current.id)
+    try {
+      const result: any = await post(`/practice/sessions/${sid}/abandon-if-empty`, {})
+      if (result && result.kept === false) localStorage.removeItem(timerStorageKey(sid))
+    } catch {
+      // 离开练习时的清理失败不阻塞导航；空会话由周期清扫兜底。
+    }
+  }
 })
 onBeforeRouteLeave(async () => {
   if (isListening.value && session.value?.status === 'active' && !activeUnitSubmitted.value) {
@@ -656,6 +675,9 @@ async function submitCurrentUnit() {
   })
   if (!confirmed) return
   const submittedUnitId = activeUnit.value.id
+  const wasRunning = timerState.value?.mode === 'running'
+  submissionBusy.value = true
+  pausePracticeTimer('submitting')
   try {
     session.value = await post(
       `/practice/sessions/${session.value.id}/units/${submittedUnitId}/submit`,
@@ -665,6 +687,9 @@ async function submitCurrentUnit() {
   } catch (e) {
     if (await handleIncompleteSubmission(e)) return
     error.value = String(e)
+  } finally {
+    // 分篇提交不结束整卷计时；失败按前台条件恢复提交前的运行状态。
+    releaseSubmissionTimer(wasRunning)
   }
 }
 
@@ -681,6 +706,9 @@ async function submitSession() {
     confirmLabel: '确认提交',
   })
   if (!confirmed) return
+  const wasRunning = timerState.value?.mode === 'running'
+  submissionBusy.value = true
+  pausePracticeTimer('submitting')
   try {
     session.value = await post(`/practice/sessions/${session.value.id}/submit`)
     finishTimer()
@@ -689,6 +717,9 @@ async function submitSession() {
   catch (e) {
     if (await handleIncompleteSubmission(e)) return
     error.value = String(e)
+  }
+  finally {
+    releaseSubmissionTimer(wasRunning)
   }
 }
 
@@ -836,6 +867,8 @@ async function copySelectedTerm() {
     </header>
     <div v-if="error" class="warning" style="margin:15px">{{ error }}</div>
     <div v-if="contentChoiceNotice" class="transfer-notice" role="status">{{ contentChoiceNotice }}</div>
+    <div v-if="timerSaveError" class="warning" style="margin:0 15px 12px" role="alert">{{ timerSaveError }}</div>
+    <div v-else-if="timerNotice" class="timer-notice" role="status">{{ timerNotice }}</div>
     <div v-if="unansweredNotice" class="unanswered-banner" role="alert">
       <AlertCircle :size="18" />{{ unansweredNotice }}
     </div>
@@ -847,7 +880,7 @@ async function copySelectedTerm() {
           ref="listeningPlayer"
           :tracks="audioTracks"
           :seekable="audioSeekable"
-          :timer-paused="timerState?.mode === 'paused'"
+          :timer-paused="timerState?.mode === 'paused' || !pageForeground || pageLeaving"
           :current-question-number="currentListeningQuestionNumber"
           :answered-count="listeningAnsweredCount"
           :question-count="activeUnit.questions.length"
@@ -1164,7 +1197,7 @@ async function copySelectedTerm() {
         <small>本次选择只对当前练习生效。</small>
       </div>
     </section>
-    <section v-if="timerState?.mode === 'paused' && session?.status === 'active'" class="timer-overlay timer-pause-overlay" role="dialog" aria-modal="true" aria-labelledby="timer-pause-title">
+    <section v-if="timerState?.mode === 'paused' && timerState?.pauseReason === 'manual' && session?.status === 'active'" class="timer-overlay timer-pause-overlay" role="dialog" aria-modal="true" aria-labelledby="timer-pause-title">
       <div class="timer-dialog pause-dialog card">
         <span class="timer-dialog-icon rest"><Coffee :size="30" /></span>
         <span class="eyebrow">TAKE A BREATH</span>
