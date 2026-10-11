@@ -101,6 +101,6 @@
 
 - 2026-10-11 方案制定；同日前置工作：Android 树身份修复已提交 `a8282d7`、文档 `7b29bc3`。
 - 批次 A：已完成（内测树）。后端 `choose_snapshot` restart 分支按携带/重置/提交带入重写并返回计数；前端弹窗文案与结果提示条（`.transfer-notice`）落地；`tests/test_practice_snapshots.py` 10/10、全量 309 过/1 既有跳过；浏览器验收 `frontend/tests/practice-content-transfer.mjs`（真实 PracticeView 挂载 + 合成会话，浅/深色 1280×800 截图于 work-logs/batchA-shots）。公测树已同步。
-- 批次 B：已完成（内测树，公测树已同步同批改动并复跑门禁）。`services/practiceTimer.ts` 状态机原样移植（单调时钟、暂停原因、v2 快照、legacy 迁移）；PracticeView 换用 performance.now() + 每 5 秒检查点 + 可见性自动暂停/恢复 + 路由离开结算（abandon-if-empty）+ 提交前冻结（整卷/分篇，失败按前台条件恢复）；休息遮罩仅手动暂停显示；ListeningPlayer 对齐平板防绕过语义（暂停期禁播放、清延迟自动播放、切轨不排队）。状态机测试 `practice-timer.mjs` 6/6、浏览器验收 `practice-timer-ui.mjs` 四场景通过、全量 309 过、构建过。桌面适配两处：检查点沿用前端本地存储（桌面单机可靠，未加后端字段）；自动暂停回前台自动续计、手动休息需显式继续（与平板一致，修正方案初稿中"恢复可见不自动续计"的表述）。公测树已同步。
-- 批次 C：未开始。
+- 批次 B：已完成（内测树）。`services/practiceTimer.ts` 状态机原样移植（单调时钟、暂停原因、v2 快照、legacy 迁移）；PracticeView 换用 performance.now() + 每 5 秒检查点 + 可见性自动暂停/恢复 + 路由离开结算（abandon-if-empty）+ 提交前冻结（整卷/分篇，失败按前台条件恢复）；休息遮罩仅手动暂停显示；ListeningPlayer 对齐平板防绕过语义（暂停期禁播放、清延迟自动播放、切轨不排队）。状态机测试 `practice-timer.mjs` 6/6、浏览器验收 `practice-timer-ui.mjs` 四场景通过、全量 309 过、构建过。桌面适配两处：检查点沿用前端本地存储（桌面单机可靠，未加后端字段）；自动暂停回前台自动续计、手动休息需显式继续（与平板一致，修正方案初稿中"恢复可见不自动续计"的表述）。公测树已同步。
+- 批次 C：已完成（内测树，公测树已同步同批改动并复跑门禁）。后端新增 `services/daily_study.py`（目录/状态，browse-order-v1 排序与平板一致）+ `routers/vocabulary.py` 的 `/vocabulary/daily-study/catalog|status` 端点；详情 `_serialize_entry` 注入 `daily_study_identity`（桌面身份 = `nt:<normalized_term>`，不入同步载荷）；前端 `services/dailyStudy.ts` 原样移植会话/目录/缓存/续看，`views/DailyStudyView.vue` 桌面宽屏版（去掉横屏门控与旋转提示，键盘←→/Esc、触摸滑动保留），路由 `/vocabulary/daily-study` 注册，单词本页头新增「每日一学」入口。后端测试 5/5、全量 314 过；浏览器验收 `daily-study-ui.mjs`（目录/导航/键盘/续看持久化/空态/浅深色/无溢出）。公测树已同步。
 - 批次 D：未开始。

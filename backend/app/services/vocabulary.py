@@ -229,6 +229,8 @@ def _serialize_entry(connection: sqlite3.Connection, entry_id: int) -> dict[str,
     if row is None:
         raise LookupError("单词不存在")
     payload = dict(row)
+    # 每日一学续看守卫身份（与目录 identity 同源），不入同步载荷。
+    payload["daily_study_identity"] = "nt:" + str(payload.get("normalized_term") or "")
     review_count = connection.execute("SELECT COUNT(*) FROM vocabulary_reviews WHERE entry_id=?", (entry_id,)).fetchone()[0]
     payload["review_revision"] = json.dumps([payload.get("normalized_term"), payload.get("last_reviewed_at"), payload.get("next_review_at"), payload.get("updated_at"), review_count], ensure_ascii=False, separators=(",", ":"))
     job = connection.execute('SELECT state,error FROM vocabulary_enrichment_jobs WHERE entry_id=?', (entry_id,)).fetchone()

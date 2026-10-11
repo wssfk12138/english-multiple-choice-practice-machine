@@ -9,6 +9,7 @@ import SettingsView from './views/SettingsView.vue'
 import WrongAnalysisView from './views/WrongAnalysisView.vue'
 import WrongView from './views/WrongView.vue'
 import VocabularyView from './views/VocabularyView.vue'
+import DailyStudyView from './views/DailyStudyView.vue'
 import TrashView from './views/TrashView.vue'
 import HelpView from './views/HelpView.vue'
 import RemoteQuestionBanksView from './views/RemoteQuestionBanksView.vue'
@@ -26,6 +27,7 @@ export default createRouter({
     { path: '/wrong/:unitId/analysis', component: WrongAnalysisView },
     { path: '/wrong/analysis/:unitId', component: WrongAnalysisView },
     { path: '/vocabulary', component: VocabularyView },
+    { path: '/vocabulary/daily-study', component: DailyStudyView },
     { path: '/imports', component: ImportView },
     { path: '/assistant', component: AiAssistant },
     { path: '/settings', component: SettingsHubView },

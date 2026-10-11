@@ -258,6 +258,30 @@ def translation_status(connection: sqlite3.Connection = Depends(get_db)) -> dict
     return result
 
 
+@router.get("/daily-study/catalog")
+def daily_study_catalog(
+    status: str = "all",
+    search: str = "",
+    scope: str = "all",
+    connection: sqlite3.Connection = Depends(get_db),
+) -> dict:
+    from ..services.daily_study import daily_study_catalog
+
+    return daily_study_catalog(connection, status=status, search=search.strip(), scope=scope)
+
+
+@router.get("/daily-study/status")
+def daily_study_status(
+    status: str = "all",
+    search: str = "",
+    scope: str = "all",
+    connection: sqlite3.Connection = Depends(get_db),
+) -> dict:
+    from ..services.daily_study import daily_study_metadata
+
+    return daily_study_metadata(connection, status=status, search=search.strip(), scope=scope)
+
+
 @router.get("/{entry_id}")
 def read_entry(
     entry_id: int, connection: sqlite3.Connection = Depends(get_db)
