@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import time
 from typing import Any
 
@@ -229,6 +230,65 @@ def list_available_models(
     raise ValueError("无法获取模型列表，请检查接口地址、API Key 或手动填写模型名称")
 
 
+def _vocabulary_chat_request(connection: sqlite3.Connection, url: str, headers: dict[str, str], payload: dict[str, Any], definition) -> str:
+    """词汇任务专用的一次性请求路径（平板 S3 策略的桌面实现）。
+
+    不自动重试、不跟随重定向、不二次回放 response_format 兼容重发；
+    连接/读取空闲按供应商策略，总期限 240 秒由看门狗强制中断；
+    响应超过 4MiB 或 finish_reason 命中截断集都按固定安全文案停止。
+    错误信息不携带 URL、API Key 或供应商响应正文。
+    """
+    from .vocabulary_tasks import (
+        RESPONSE_BYTES_LIMIT,
+        SAFE_HTTP_MESSAGE,
+        TOTAL_DEADLINE_SECONDS,
+        TRUNCATED_FINISH_REASONS,
+        VocabularyTruncatedError,
+        consume_quota,
+        network_policy,
+    )
+    if not consume_quota(connection, "vocabulary"):
+        raise ValueError("词汇任务本机额度已用完（10 分钟窗口 4 次请求），剩余任务保持排队；请稍后用重试入口继续")
+    policy = network_policy(url)
+    client = httpx.Client(
+        timeout=httpx.Timeout(connect=policy["connect"], read=policy["read"], write=30, pool=5),
+        follow_redirects=False,
+    )
+    started = time.monotonic()
+    deadline_hit = threading.Event()
+    watchdog = threading.Timer(TOTAL_DEADLINE_SECONDS, deadline_hit.set)
+    watchdog.daemon = True
+    watchdog.start()
+    try:
+        try:
+            response = client.post(url, headers=headers, json=payload)
+        except httpx.HTTPError as error:
+            if deadline_hit.is_set() or time.monotonic() - started >= TOTAL_DEADLINE_SECONDS:
+                raise ValueError("词汇请求超过 240 秒总期限，已停止；未自动重发") from error
+            raise ValueError(SAFE_HTTP_MESSAGE) from error
+    finally:
+        watchdog.cancel()
+    if deadline_hit.is_set():
+        raise ValueError("词汇请求超过 240 秒总期限，已停止；未自动重发")
+    if len(response.content) > RESPONSE_BYTES_LIMIT:
+        raise ValueError("词汇响应超过大小上限，已停止")
+    if response.status_code >= 400:
+        raise ValueError(f"模型服务返回 HTTP {response.status_code}，未自动重发；请稍后用重试入口继续")
+    try:
+        data: Any = response.json()
+    except (json.JSONDecodeError, ValueError):
+        data = response.text
+    if isinstance(data, dict):
+        finish: Any = None
+        choices = data.get("choices")
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+            finish = choices[0].get("finish_reason")
+        finish = finish or data.get("status") or data.get("stop_reason")
+        if isinstance(finish, str) and finish.lower() in TRUNCATED_FINISH_REASONS:
+            raise VocabularyTruncatedError("词汇响应被截断或未完整生成，未自动重发")
+    return definition.parse_text(data)
+
+
 def chat_completion(
     connection: sqlite3.Connection,
     messages: list[dict[str, str]],
@@ -238,6 +298,7 @@ def chat_completion(
     model: str | None = None,
     max_tokens: int | None = None,
     reasoning_effort: str | None = None,
+    vocabulary_execution: bool = False,
 ) -> str:
     settings = (
         _profile_with_key(connection, profile_id)
@@ -263,6 +324,8 @@ def chat_completion(
         max_tokens=max_tokens, response_format=response_format,
         reasoning_effort=effort if definition.supports_reasoning else "",
     )
+    if vocabulary_execution:
+        return _vocabulary_chat_request(connection, url, headers, payload, definition)
     def post_with_retry(client: httpx.Client, request_payload: dict[str, Any]) -> httpx.Response:
         last_response: httpx.Response | None = None
         last_error: httpx.HTTPError | None = None
