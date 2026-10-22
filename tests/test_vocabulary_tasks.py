@@ -2,6 +2,7 @@ import json
 import sqlite3
 import unittest
 from unittest.mock import patch
+from tests.vocabulary_execution_fixture import migrate, reply
 
 from backend.app.database import SCHEMA
 from backend.app.services import vocabulary_tasks
@@ -17,6 +18,7 @@ class VocabularyTaskPolicyTests(unittest.TestCase):
         self.connection = sqlite3.connect(':memory:')
         self.connection.row_factory = sqlite3.Row
         self.connection.executescript(SCHEMA)
+        migrate(self.connection)
 
     def tearDown(self):
         self.connection.close()
@@ -61,7 +63,7 @@ class VocabularyTaskPolicyTests(unittest.TestCase):
         with (
             patch("backend.app.services.vocabulary.connect", return_value=self.connection),
             patch("backend.app.services.vocabulary._has_translation_model", return_value=True),
-            patch("backend.app.services.vocabulary.chat_completion", side_effect=error) as completion,
+            patch("backend.app.services.vocabulary.chat_completion", side_effect=reply(error=error)) as completion,
         ):
             result = _translate_queued_vocabulary_batch()
         self.assertEqual(result["translated"], 0)
@@ -74,8 +76,7 @@ class VocabularyTaskPolicyTests(unittest.TestCase):
 
     def test_quota_exhausted_leaves_words_queued_without_failure(self):
         entry_id = self._queue_one_word()
-        for _ in range(4):
-            self.assertTrue(vocabulary_tasks.consume_quota(self.connection, "translation"))
+        self.connection.execute("UPDATE vocabulary_request_gate SET used=4 WHERE id=1")
         self.connection.commit()
         with (
             patch("backend.app.services.vocabulary.connect", return_value=self.connection),

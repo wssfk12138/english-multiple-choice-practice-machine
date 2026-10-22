@@ -231,62 +231,83 @@ def list_available_models(
 
 
 def _vocabulary_chat_request(connection: sqlite3.Connection, url: str, headers: dict[str, str], payload: dict[str, Any], definition) -> str:
-    """词汇任务专用的一次性请求路径（平板 S3 策略的桌面实现）。
-
-    不自动重试、不跟随重定向、不二次回放 response_format 兼容重发；
-    连接/读取空闲按供应商策略，总期限 240 秒由看门狗强制中断；
-    响应超过 4MiB 或 finish_reason 命中截断集都按固定安全文案停止。
-    错误信息不携带 URL、API Key 或供应商响应正文。
-    """
-    from .vocabulary_tasks import (
-        RESPONSE_BYTES_LIMIT,
-        SAFE_HTTP_MESSAGE,
-        TOTAL_DEADLINE_SECONDS,
-        TRUNCATED_FINISH_REASONS,
-        VocabularyTruncatedError,
-        consume_quota,
-        network_policy,
-    )
-    if not consume_quota(connection, "vocabulary"):
-        raise ValueError("词汇任务本机额度已用完（10 分钟窗口 4 次请求），剩余任务保持排队；请稍后用重试入口继续")
+    """One transmission, bounded streaming response, durable send boundary."""
+    from .vocabulary_tasks import (RESPONSE_BYTES_LIMIT, SAFE_HTTP_MESSAGE, TOTAL_DEADLINE_SECONDS,
+        TRUNCATED_FINISH_REASONS, VocabularyTruncatedError, consume_quota, network_policy)
+    from .vocabulary_requests import CURRENT
+    execution = CURRENT.get()
+    if execution:
+        execution.before_send(connection)
+    else:
+        if not consume_quota(connection, 'vocabulary'):
+            raise ValueError('词汇任务额度已用完，剩余任务保持排队')
+        connection.commit()
     policy = network_policy(url)
-    client = httpx.Client(
-        timeout=httpx.Timeout(connect=policy["connect"], read=policy["read"], write=30, pool=5),
-        follow_redirects=False,
-    )
-    started = time.monotonic()
     deadline_hit = threading.Event()
-    watchdog = threading.Timer(TOTAL_DEADLINE_SECONDS, deadline_hit.set)
-    watchdog.daemon = True
-    watchdog.start()
-    try:
+    started = time.monotonic()
+    with httpx.Client(timeout=httpx.Timeout(connect=policy['connect'], read=policy['read'], write=30, pool=5), follow_redirects=False) as client:
+        def cancel_transport():
+            deadline_hit.set()
+            client.close()
+        watchdog = threading.Timer(TOTAL_DEADLINE_SECONDS, cancel_transport)
+        watchdog.daemon = True
+        watchdog.start()
         try:
-            response = client.post(url, headers=headers, json=payload)
-        except httpx.HTTPError as error:
-            if deadline_hit.is_set() or time.monotonic() - started >= TOTAL_DEADLINE_SECONDS:
-                raise ValueError("词汇请求超过 240 秒总期限，已停止；未自动重发") from error
-            raise ValueError(SAFE_HTTP_MESSAGE) from error
-    finally:
-        watchdog.cancel()
+            chunks, size = [], 0
+            try:
+                with client.stream('POST', url, headers=headers, json=payload) as response:
+                    if execution:
+                        execution.responded = True
+                    if response.status_code >= 300:
+                        if execution:
+                            execution.failure = 'http'
+                        raise ValueError('模型服务返回 HTTP 错误，已停止，未自动重发')
+                    for chunk in response.iter_bytes(64 * 1024):
+                        if deadline_hit.is_set() or time.monotonic() - started >= TOTAL_DEADLINE_SECONDS:
+                            raise httpx.ReadTimeout('vocabulary total deadline')
+                        size += len(chunk)
+                        if size > RESPONSE_BYTES_LIMIT:
+                            if execution:
+                                execution.failure = 'truncated'
+                            raise VocabularyTruncatedError('词汇响应超过大小上限，已停止')
+                        chunks.append(chunk)
+            except (httpx.HTTPError, RuntimeError) as error:
+                if execution:
+                    execution.failure = 'unknown'
+                raise ValueError(SAFE_HTTP_MESSAGE) from error
+        finally:
+            watchdog.cancel()
     if deadline_hit.is_set():
-        raise ValueError("词汇请求超过 240 秒总期限，已停止；未自动重发")
-    if len(response.content) > RESPONSE_BYTES_LIMIT:
-        raise ValueError("词汇响应超过大小上限，已停止")
-    if response.status_code >= 400:
-        raise ValueError(f"模型服务返回 HTTP {response.status_code}，未自动重发；请稍后用重试入口继续")
+        if execution:
+            execution.failure = 'unknown'
+        raise ValueError('词汇请求超过总期限，已停止，未自动重发')
+    raw = b''.join(chunks)
     try:
-        data: Any = response.json()
-    except (json.JSONDecodeError, ValueError):
-        data = response.text
+        data: Any = json.loads(raw)
+    except (ValueError, UnicodeError):
+        try:
+            data = raw.decode('utf-8')
+        except UnicodeError as error:
+            if execution:
+                execution.failure = 'parse'
+            raise ValueError('模型响应无法解析') from error
     if isinstance(data, dict):
-        finish: Any = None
-        choices = data.get("choices")
-        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
-            finish = choices[0].get("finish_reason")
-        finish = finish or data.get("status") or data.get("stop_reason")
+        choices = data.get('choices')
+        finish = choices[0].get('finish_reason') if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None
+        finish = finish or data.get('status') or data.get('stop_reason')
         if isinstance(finish, str) and finish.lower() in TRUNCATED_FINISH_REASONS:
-            raise VocabularyTruncatedError("词汇响应被截断或未完整生成，未自动重发")
-    return definition.parse_text(data)
+            if execution:
+                execution.failure = 'truncated'
+            raise VocabularyTruncatedError('词汇响应被截断或未完整生成，未自动重发')
+    try:
+        content = definition.parse_text(data)
+    except (ValueError, KeyError, TypeError) as error:
+        if execution:
+            execution.failure = 'parse'
+        raise ValueError('模型响应无法解析') from error
+    if execution:
+        execution.after_response(connection)
+    return content
 
 
 def chat_completion(

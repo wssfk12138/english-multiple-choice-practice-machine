@@ -8,3 +8,4 @@ httpx==0.28.1
 lxml==6.0.0
 pypdf==5.9.0
 pdfplumber==0.11.10
+sherpa-onnx==1.13.8

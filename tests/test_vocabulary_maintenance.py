@@ -2,6 +2,7 @@ import contextlib
 import sqlite3
 import unittest
 from unittest.mock import patch
+from tests.vocabulary_execution_fixture import migrate, reply
 from backend.app.database import SCHEMA
 from backend.app.services import vocabulary as service
 from backend.app.services import vocabulary_maintenance as maintenance
@@ -10,7 +11,7 @@ class VocabularyMaintenanceTest(unittest.TestCase):
     def setUp(self):
         self.db = sqlite3.connect(':memory:')
         self.db.row_factory = sqlite3.Row
-        self.db.executescript(SCHEMA)
+        self.db.executescript(SCHEMA); migrate(self.db)
         self.db.execute("INSERT INTO vocabulary_entries(id,term,normalized_term,translation_status,common_meaning,user_edited) VALUES(1,'word','word','ready','manual',1)")
         self.db.commit()
     def tearDown(self):
@@ -34,8 +35,9 @@ class VocabularyMaintenanceTest(unittest.TestCase):
         self.db.execute("UPDATE vocabulary_enrichment_jobs SET state='failed'")
         self.db.commit()
         maintenance.update_enrichment_run(self.db,'retry')
-        self.assertTrue(maintenance.enrichment_status(self.db)['paused'])
+        self.assertFalse(maintenance.enrichment_status(self.db)['paused'])
         self.assertEqual(maintenance.enrichment_status(self.db)['queued'],1)
+        maintenance.update_enrichment_run(self.db,'pause')
         maintenance.update_enrichment_run(self.db,'resume')
         self.assertFalse(maintenance.enrichment_status(self.db)['paused'])
     def test_missing_example_is_queued_but_complete_entry_is_not(self):

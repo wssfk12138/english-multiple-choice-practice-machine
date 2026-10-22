@@ -62,7 +62,8 @@ onMounted(() => {
 </template>
 
 <style scoped>
-@media (max-width: 820px) {
-  .sidebar nav { grid-template-columns: repeat(10, minmax(0, 1fr)); }
+@media(max-width:980px){
+  .sidebar nav{display:flex;overflow-x:auto;overflow-y:hidden;gap:4px;scroll-padding-inline:8px;scrollbar-width:thin}
+  .sidebar nav a{flex:0 0 auto;min-width:104px;padding:4px 10px;white-space:nowrap;font-size:15px;line-height:1.25}
 }
 </style>

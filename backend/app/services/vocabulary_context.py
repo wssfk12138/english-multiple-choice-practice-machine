@@ -41,30 +41,58 @@ def project_vocabulary(entry, history):
     latest = max(valid, key=lambda item: (encounter_time(item.get("created_at")), occurrence_key(item)), default=None)
     key = occurrence_key(latest) if latest else ""
     return {**entry, "occurrences": [latest] if latest else [], "latest_sentence": latest.get("context_sentence", "") if latest else "", "context_key": key,
-            "morphology": safe_object(entry.get("morphology")), "generated_example": safe_object(entry.get("generated_example")),
+            "morphology": vocabulary_enhancements(entry, bool(latest))[0], "generated_example": safe_object(entry.get("generated_example")),
             "contextual_meaning": entry.get("contextual_meaning", "") if key and entry.get("contextual_occurrence_key") == key else ""}
+
+
+MORPHOLOGY_LABELS = {'base': '原形', 'base form': '原形', 'infinitive': '原形', 'infinitive form': '原形', 'lemma': '原形', 'present': '现在式', 'present tense': '现在式', 'present form': '现在式', 'past': '过去式', 'past tense': '过去式', 'past form': '过去式', 'past participle': '过去分词', 'present participle': '现在分词', 'gerund': '动名词', 'third person singular': '第三人称单数', 'third person singular present': '第三人称单数', 'plural': '复数', 'singular': '单数', 'singular form': '单数', 'plural form': '复数', 'comparative': '比较级', 'superlative': '最高级', 'uncountable': '不可数', 'uncountable noun': '不可数', 'mass noun': '不可数', '3rd person singular': '第三人称单数', 'fixed phrase': '固定短语'}
+
+
+def morphology_label(value):
+    label = value.strip()[:40] if isinstance(value, str) else ''
+    if not label:
+        return ''
+    if label in MORPHOLOGY_LABELS.values() or label == '词形待确认':
+        return label
+    return MORPHOLOGY_LABELS.get(re.sub(r'[\s_-]+', ' ', label.lower()).strip(), '词形待确认')
 
 
 def vocabulary_enhancements(value, has_source):
     def text(item, limit):
-        return item.strip()[:limit] if isinstance(item, str) else ""
-    source = safe_object(value.get("morphology"))
-    forms = source.get("forms") if isinstance(source.get("forms"), list) else []
-    forms = [{"label": text(item.get("label"), 40), "word": text(item.get("word"), 100)} for item in forms if isinstance(item, dict)]
-    morphology = {"lemma": text(source.get("lemma") or value.get("lemma"), 120), "currentForm": text(source.get("currentForm"), 80), "ambiguous": source.get("ambiguous") is True, "note": text(source.get("note"), 200), "forms": [item for item in forms if item["label"] and item["word"]][:10]}
-    example = safe_object(value.get("generatedExample") or value.get("generated_example"))
-    return morphology, {} if has_source else {"sentence": text(example.get("sentence"), 500), "translation": text(example.get("translation"), 500)}
+        return item.strip()[:limit] if isinstance(item, str) else ''
+    source = safe_object(value.get('morphology'))
+    forms = source.get('forms') if isinstance(source.get('forms'), list) else []
+    forms = [{'label': morphology_label(item.get('label')), 'rawLabel': text(item.get('rawLabel') or item.get('label'), 100), 'word': text(item.get('word'), 100)} for item in forms if isinstance(item, dict)]
+    morphology = {'lemma': text(source.get('lemma') or value.get('lemma'), 120), 'currentForm': morphology_label(source.get('currentForm')), 'rawCurrentForm': text(source.get('rawCurrentForm') or source.get('currentForm'), 100), 'ambiguous': source.get('ambiguous') is True, 'note': text(source.get('note'), 200), 'forms': [item for item in forms if item['label'] and item['word']][:10]}
+    example = safe_object(value.get('generatedExample') or value.get('generated_example'))
+    return morphology, {'sentence': text(example.get('sentence'), 500), 'translation': text(example.get('translation'), 500)}
+
+
+def valid_generated_example(value, term):
+    if not isinstance(value.get('sentence'), str) or not isinstance(value.get('translation'), str):
+        return False
+    sentence = value['sentence'].strip()
+    if not sentence or len(sentence) > 500 or not value['translation'].strip() or len(value['translation']) > 500 or not re.search(r'''[.!?]["'”’)]*$''', sentence) or re.match(r'(?:directions|section|part [ab])\b', sentence, re.I):
+        return False
+    words = re.findall(r"[a-z]+(?:['-][a-z]+)*", sentence.lower().replace('’', "'"))
+    target = str(term or '').strip().lower().replace('’', "'")
+    return bool(target) and ' ' + target + ' ' in ' ' + ' '.join(words) + ' '
+
 
 def valid_vocabulary_enhancements(value, term, has_source):
-    morphology, example = vocabulary_enhancements(value, has_source)
-    if not morphology['lemma'] or not morphology['currentForm'] or (morphology['ambiguous'] and not morphology['note']):
+    raw = safe_object(value.get('morphology'))
+    if any(not isinstance(raw.get(key), str) for key in ('lemma', 'currentForm', 'note')) or not raw['lemma'].strip() or not raw['currentForm'].strip() or not isinstance(raw.get('ambiguous'), bool) or not isinstance(raw.get('forms'), list):
         return False
-    if has_source:
-        return isinstance(value.get('contextualMeaning'), str) and bool(value['contextualMeaning'].strip())
-    return bool(example.get('translation') and valid_source_sentence({'surface_form': term, 'context_sentence': example.get('sentence')}))
+    if any(not isinstance(item, dict) or any(not isinstance(item.get(key), str) or not item[key].strip() for key in ('label', 'word')) for item in raw['forms']):
+        return False
+    if morphology_label(raw['currentForm']) == '词形待确认' and (not raw['ambiguous'] or not raw['note'].strip()):
+        return False
+    if raw['ambiguous'] and not raw['note'].strip():
+        return False
+    return valid_generated_example(safe_object(value.get('generatedExample') or value.get('generated_example')), term)
 
 
 def vocabulary_write_guard(entry):
-    fields = ['term', 'user_edited', 'common_meaning', 'contextual_meaning', 'morphology', 'generated_example', 'contextual_occurrence_key']
+    fields = ['term', 'user_edited', 'lemma', 'phonetic', 'part_of_speech', 'common_meaning', 'memory_hint', 'synonyms', 'antonyms', 'similar_forms', 'contextual_meaning', 'morphology', 'generated_example', 'contextual_occurrence_key']
+    fields += [key for key in ('sync_id', 'daily_study_identity') if key in entry]
     return ' AND '.join(field + ' IS ?' for field in fields), [entry.get(field) for field in fields]
-

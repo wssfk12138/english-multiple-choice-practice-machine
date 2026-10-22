@@ -14,6 +14,7 @@ frontend/vite.config.js
 frontend/vite.config.d.ts
 
 # Local runtime data and private development artifacts
+tts/
 backend/data/
 work/
 outputs/
@@ -46,3 +47,12 @@ Thumbs.db
 # Local agent working notes (not for publication)
 AGENTS.md
 PROJECT_NOTES.md
+
+# Ad-hoc previews, probes, build captures and local backups (never publish).
+# Real source, tests, docs and frontend/scripts/tts-licenses/ stay tracked.
+tmp-*
+preview-*
+frontend/.tts-cache/
+.tts-cache/
+*.bak.*
+*.pre_batch*

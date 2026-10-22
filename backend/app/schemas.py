@@ -1,4 +1,5 @@
 from __future__ import annotations
+from pydantic import field_validator
 
 import json
 from typing import Any, Literal
@@ -20,6 +21,7 @@ class PracticeCreate(BaseModel):
     selection_scope: Literal["unit", "paper_unit_type"] = "unit"
     count: int = 1
     shuffle_options: bool = True
+    force_new: bool = False
 
 
 class UpdateOpenRequest(BaseModel):
@@ -223,6 +225,7 @@ class VocabularyUpdate(BaseModel):
 
 
 class VocabularyReview(BaseModel):
+    response_projection: Literal["full", "ack"] = "full"
     expected_revision: str | None = Field(default=None, max_length=2048)
     command_id: str | None = Field(default=None, max_length=32, pattern="^[a-f0-9]{32}$")
     rating: Literal["again", "hard", "mastered", "know", "fluent"]
@@ -274,3 +277,32 @@ class LanSyncPushRequest(BaseModel):
         if encoded_size > LAN_SYNC_MAX_REQUEST_BYTES:
             raise ValueError("局域网同步单次请求不能超过 16 MiB")
         return self
+
+
+class SpeechSynthesisRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=80)
+    accent: Literal["us", "gb"] = "us"
+    request_id: str | None = Field(default=None, max_length=80)
+
+
+class VocabularyRequestRun(BaseModel):
+    action: Literal['pause', 'acknowledge', 'continue', 'retry', 'retry-all']
+    task: Literal['translation', 'enrichment'] | None = None
+    command_id: str | None = Field(default=None, max_length=80)
+    entry_ids: list[int] | None = Field(default=None, max_length=1000)
+    attempt_id: str | None = Field(default=None, max_length=80)
+    confirmed: bool = False
+
+    @field_validator('entry_ids', mode='before')
+    @classmethod
+    def validate_request_ids(cls, value):
+        if value is not None and (not isinstance(value, list) or any(type(item) is not int or item <= 0 or item > 9007199254740991 for item in value)):
+            raise ValueError('Invalid vocabulary entry IDs')
+        return list(dict.fromkeys(value)) if value is not None else None
+
+    @field_validator('confirmed', mode='before')
+    @classmethod
+    def validate_confirmation(cls, value):
+        if type(value) is not bool:
+            raise ValueError('Confirmation must be boolean')
+        return value

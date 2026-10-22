@@ -1,5 +1,6 @@
 export const VOCAB_DISPLAY_STORAGE_KEY = 'vocab-display-config'
 export type VocabDisplayKey =
+  | 'contextual'
   | 'common_meaning'
   | 'phonetic'
   | 'part_of_speech'
@@ -16,6 +17,7 @@ export type VocabDisplayOption = { key: VocabDisplayKey; label: string }
 
 export const VOCAB_DISPLAY_OPTIONS: VocabDisplayOption[] = [
   { key: 'common_meaning', label: '常用释义' },
+  { key: 'contextual', label: '语境释义' },
   { key: 'phonetic', label: '音标' },
   { key: 'part_of_speech', label: '词性' },
   { key: 'source_sentence', label: '真题原句' },
@@ -29,6 +31,7 @@ export const VOCAB_DISPLAY_OPTIONS: VocabDisplayOption[] = [
 ]
 
 export const VOCAB_DISPLAY_DEFAULTS: Record<VocabDisplayKey, boolean> = {
+  contextual: true,
   common_meaning: true,
   phonetic: true,
   part_of_speech: true,
@@ -47,6 +50,7 @@ export type VocabDisplayConfig = Record<VocabDisplayKey, boolean>
 // 这是与用户设置并列的另一份权威值，设置页的开关（含以后新增的栏目）不参与复习卡；
 // 复习入口必须读这里，不得传 loadVocabDisplayConfig() 的结果。
 export const VOCAB_REVIEW_DISPLAY_CONFIG: Readonly<VocabDisplayConfig> = Object.freeze({
+  contextual: false,
   common_meaning: true,
   phonetic: false,
   part_of_speech: false,

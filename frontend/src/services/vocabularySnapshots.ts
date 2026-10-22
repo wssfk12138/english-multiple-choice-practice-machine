@@ -47,6 +47,10 @@ export function saveVocabularyListSnapshot(snapshot: Omit<VocabularyListSnapshot
 }
 
 export type VocabularyReviewSnapshot = {
+  groupSource?: any[]
+  ratedGroupKeys?: string[]
+  dismissedGroups?: string[]
+  completedGroupId?: string
   schemaVersion: number
   savedAt: number
   revision: string

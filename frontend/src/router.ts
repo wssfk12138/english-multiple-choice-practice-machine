@@ -6,6 +6,7 @@ import LibraryView from './views/LibraryView.vue'
 import PracticeView from './views/PracticeView.vue'
 import SettingsHubView from './views/SettingsHubView.vue'
 import SettingsView from './views/SettingsView.vue'
+import VocabularySettingsView from './views/VocabularySettingsView.vue'
 import WrongAnalysisView from './views/WrongAnalysisView.vue'
 import WrongView from './views/WrongView.vue'
 import VocabularyView from './views/VocabularyView.vue'
@@ -32,6 +33,7 @@ export default createRouter({
     { path: '/assistant', component: AiAssistant },
     { path: '/settings', component: SettingsHubView },
     { path: '/settings/model', component: SettingsView },
+    { path: '/settings/vocabulary', component: VocabularySettingsView },
     { path: '/settings/sync', component: SyncSettingsView },
     { path: '/settings/updates', component: UpdatesSettingsView },
     { path: '/settings/diagnostics', component: DiagnosticsSettingsView },

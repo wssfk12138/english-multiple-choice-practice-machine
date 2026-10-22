@@ -15,7 +15,7 @@ const output = process.env.PRACTICE_TIMER_OUTPUT
 if (output) await mkdir(output, { recursive: true })
 
 const stubs = {
-  router: 'const params={id:"1"};export const useRoute=()=>({get params(){return params}});export const useRouter=()=>({push:async()=>{},replace:async(p)=>{params.id=String(p).split("/").pop()}});export const onBeforeRouteLeave=()=>{};',
+  router: 'const params={id:"1"};export const useRoute=()=>({get params(){return params}});export const useRouter=()=>({afterEach:()=>()=>{},push:async()=>{},replace:async(p)=>{params.id=String(p).split("/").pop()}});export const onBeforeRouteLeave=()=>{};export const onBeforeRouteUpdate=()=>{};',
   api: 'export const get=(p)=>globalThis.mockApi(p);export const post=(p,b)=>globalThis.mockApi(p,b);export const put=(p,b)=>globalThis.mockApi(p,b);',
   dialogs: 'export const confirmDialog=async()=>true;',
   player: 'import {h} from "vue";export default {name:"ListeningPlayerStub",props:["tracks","seekable","timerPaused","resumeOnTimerContinue","currentQuestionNumber","answeredCount"],render:()=>h("section",{class:"listening-stub"},"listening-stub")};',

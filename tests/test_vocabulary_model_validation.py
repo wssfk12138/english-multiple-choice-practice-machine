@@ -10,7 +10,7 @@ class VocabularyModelValidationTests(unittest.TestCase):
         self.db=sqlite3.connect(':memory:'); self.db.row_factory=sqlite3.Row; self.db.executescript(SCHEMA)
         self.db.execute("INSERT INTO vocabulary_entries(id,term,normalized_term,translation_status) VALUES(1,'went','went','translating')")
         self.db.commit()
-        self.valid={'entryId':1,'commonMeaning':'去','lemma':'go','morphology':{'lemma':'go','currentForm':'过去式','forms':[]},'generatedExample':{'sentence':'She went home after school.','translation':'她放学后回家了。'}}
+        self.valid={'entryId':1,'commonMeaning':'去','lemma':'go','morphology':{'lemma':'go','currentForm':'过去式','ambiguous':False,'note':'','forms':[]},'generatedExample':{'sentence':'She went home after school.','translation':'她放学后回家了。'}}
     def tearDown(self): self.db.close()
     def entry(self): return dict(self.db.execute('SELECT * FROM vocabulary_entries WHERE id=1').fetchone())
     def translate(self, response, callback=lambda:None):

@@ -17,9 +17,11 @@ def enrichment_status(connection):
     return {**counts, 'paused': enrichment_paused(connection), 'waiting_configuration': not configured}
 
 def update_enrichment_run(connection, action):
+    from . import vocabulary_requests as requests
+    retry_ids = [row[0] for row in connection.execute("SELECT entry_id FROM vocabulary_enrichment_jobs WHERE state='failed'")] if action == 'retry' else None
     if action not in {'start', 'pause', 'resume', 'retry', 'inventory'}:
         raise ValueError('无效的补缺操作')
-    if action in {'pause', 'resume'}:
+    if action in {'pause', 'resume', 'retry'}:
         connection.execute('INSERT INTO app_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', (PAUSE_KEY, '1' if action == 'pause' else '0'))
     if action in {'start', 'inventory'}:
         # A ready job can legitimately have empty optional fields. Never requeue it
@@ -38,4 +40,11 @@ def update_enrichment_run(connection, action):
     if action == 'retry':
         connection.execute("UPDATE vocabulary_enrichment_jobs SET state='queued',error='',updated_at=CURRENT_TIMESTAMP WHERE state='failed'")
     connection.commit()
+    if action == 'pause':
+        requests.pause(connection)
+    elif action != 'inventory':
+        try:
+            requests.create_run(connection, 'enrichment', retry_ids, explicit=action in {'retry','resume'}, retry=action == 'retry', source=action)
+        except (ValueError, LookupError):
+            pass  # The existing status reports missing configuration; no send.
     return enrichment_status(connection)

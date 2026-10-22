@@ -16,14 +16,14 @@ def list_papers(connection: sqlite3.Connection = Depends(get_db)) -> list[dict]:
     profile_id = get_active_profile_id(connection)
     connection.execute(
         """
-        UPDATE practice_sessions SET status = 'abandoned', updated_at = CURRENT_TIMESTAMP
+        UPDATE practice_sessions SET status = 'abandoned'
         WHERE mode = 'paper' AND status = 'active'
           AND NOT EXISTS (SELECT 1 FROM practice_answers pa
             WHERE pa.session_id = practice_sessions.id
               AND TRIM(COALESCE(pa.user_answer, '')) <> '')
           AND NOT EXISTS (SELECT 1 FROM practice_unit_submissions pus
             WHERE pus.session_id = practice_sessions.id)
-          AND COALESCE(practice_sessions.updated_at, practice_sessions.started_at)
+          AND practice_sessions.started_at
             < datetime('now', '-7 days')
         """
     )
@@ -32,7 +32,38 @@ def list_papers(connection: sqlite3.Connection = Depends(get_db)) -> list[dict]:
         """
         SELECT papers.*,
                COUNT(DISTINCT units.id) AS unit_count,
-               COUNT(questions.id) AS question_count
+               COUNT(questions.id) AS question_count,
+               (SELECT practice_sessions.id FROM practice_sessions
+                WHERE practice_sessions.paper_id = papers.id
+                  AND practice_sessions.status = 'active'
+                  AND practice_sessions.mode = 'paper'
+                  AND (EXISTS (SELECT 1 FROM practice_answers pa_progress
+                       WHERE pa_progress.session_id = practice_sessions.id
+                         AND TRIM(COALESCE(pa_progress.user_answer, '')) <> '')
+                    OR EXISTS (SELECT 1 FROM practice_unit_submissions pus_progress
+                       WHERE pus_progress.session_id = practice_sessions.id))
+                ORDER BY practice_sessions.id DESC LIMIT 1) AS active_session_id,
+               (SELECT COUNT(*) FROM practice_unit_submissions
+                WHERE practice_unit_submissions.session_id = (
+                    SELECT id FROM practice_sessions
+                    WHERE paper_id = papers.id AND status = 'active' AND mode = 'paper'
+                      AND (EXISTS (SELECT 1 FROM practice_answers pa_progress
+                           WHERE pa_progress.session_id = practice_sessions.id
+                             AND TRIM(COALESCE(pa_progress.user_answer, '')) <> '')
+                        OR EXISTS (SELECT 1 FROM practice_unit_submissions pus_progress
+                           WHERE pus_progress.session_id = practice_sessions.id))
+                    ORDER BY id DESC LIMIT 1
+                )) AS active_done,
+               (SELECT practice_sessions.score FROM practice_sessions
+                WHERE practice_sessions.paper_id = papers.id
+                  AND practice_sessions.status = 'submitted'
+                  AND practice_sessions.mode = 'paper'
+                ORDER BY practice_sessions.id DESC LIMIT 1) AS last_score,
+               (SELECT practice_sessions.max_score FROM practice_sessions
+                WHERE practice_sessions.paper_id = papers.id
+                  AND practice_sessions.status = 'submitted'
+                  AND practice_sessions.mode = 'paper'
+                ORDER BY practice_sessions.id DESC LIMIT 1) AS last_max_score
         FROM papers
         LEFT JOIN units ON units.paper_id = papers.id
         LEFT JOIN questions ON questions.unit_id = units.id
@@ -63,6 +94,37 @@ def get_paper(
         """
         SELECT units.*,
                COUNT(questions.id) AS question_count,
+               (SELECT practice_sessions.id FROM practice_sessions
+                WHERE practice_sessions.paper_id = papers.id
+                  AND practice_sessions.status = 'active'
+                  AND practice_sessions.mode = 'paper'
+                  AND (EXISTS (SELECT 1 FROM practice_answers pa_progress
+                       WHERE pa_progress.session_id = practice_sessions.id
+                         AND TRIM(COALESCE(pa_progress.user_answer, '')) <> '')
+                    OR EXISTS (SELECT 1 FROM practice_unit_submissions pus_progress
+                       WHERE pus_progress.session_id = practice_sessions.id))
+                ORDER BY practice_sessions.id DESC LIMIT 1) AS active_session_id,
+               (SELECT COUNT(*) FROM practice_unit_submissions
+                WHERE practice_unit_submissions.session_id = (
+                    SELECT id FROM practice_sessions
+                    WHERE paper_id = papers.id AND status = 'active' AND mode = 'paper'
+                      AND (EXISTS (SELECT 1 FROM practice_answers pa_progress
+                           WHERE pa_progress.session_id = practice_sessions.id
+                             AND TRIM(COALESCE(pa_progress.user_answer, '')) <> '')
+                        OR EXISTS (SELECT 1 FROM practice_unit_submissions pus_progress
+                           WHERE pus_progress.session_id = practice_sessions.id))
+                    ORDER BY id DESC LIMIT 1
+                )) AS active_done,
+               (SELECT practice_sessions.score FROM practice_sessions
+                WHERE practice_sessions.paper_id = papers.id
+                  AND practice_sessions.status = 'submitted'
+                  AND practice_sessions.mode = 'paper'
+                ORDER BY practice_sessions.id DESC LIMIT 1) AS last_score,
+               (SELECT practice_sessions.max_score FROM practice_sessions
+                WHERE practice_sessions.paper_id = papers.id
+                  AND practice_sessions.status = 'submitted'
+                  AND practice_sessions.mode = 'paper'
+                ORDER BY practice_sessions.id DESC LIMIT 1) AS last_max_score,
                COALESCE(SUM(questions.score), 0) AS max_score
         FROM units
         LEFT JOIN questions ON questions.unit_id = units.id

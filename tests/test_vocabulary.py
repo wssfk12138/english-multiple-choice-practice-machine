@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import unittest
 from unittest.mock import patch
+from tests.vocabulary_execution_fixture import migrate, reply
 
 from backend.app.database import SCHEMA
 from backend.app.services.vocabulary import (
@@ -21,6 +22,7 @@ class VocabularyTests(unittest.TestCase):
         self.connection = sqlite3.connect(":memory:")
         self.connection.row_factory = sqlite3.Row
         self.connection.executescript(SCHEMA)
+        migrate(self.connection)
 
     def tearDown(self) -> None:
         self.connection.close()
@@ -80,7 +82,8 @@ class VocabularyTests(unittest.TestCase):
                 {
                     "entryId": first["entry_id"],
                     "lemma": "claim",
-                    "morphology": {"lemma": "claim", "currentForm": "第三人称单数", "forms": []},
+                    "generatedExample": {"sentence": "She claims the prize.", "translation": "她领取奖品。"},
+                    "morphology": {"lemma": "claim", "currentForm": "第三人称单数", "ambiguous": False, "note": "", "forms": []},
                     "phonetic": "",
                     "partOfSpeech": "v.",
                     "contextualMeaning": "声称",
@@ -90,7 +93,8 @@ class VocabularyTests(unittest.TestCase):
                 {
                     "entryId": second["entry_id"],
                     "lemma": "evidence",
-                    "morphology": {"lemma": "evidence", "currentForm": "原形", "forms": []},
+                    "generatedExample": {"sentence": "The evidence is clear.", "translation": "证据很明确。"},
+                    "morphology": {"lemma": "evidence", "currentForm": "原形", "ambiguous": False, "note": "", "forms": []},
                     "phonetic": "",
                     "partOfSpeech": "n.",
                     "contextualMeaning": "证据",
@@ -112,7 +116,7 @@ class VocabularyTests(unittest.TestCase):
             ),
             patch(
                 "backend.app.services.vocabulary.chat_completion",
-                return_value=__import__("json").dumps(response, ensure_ascii=False),
+                side_effect=reply(__import__("json").dumps(response, ensure_ascii=False)),
             ) as completion,
         ):
             result = translate_queued_vocabulary()
@@ -212,7 +216,8 @@ class VocabularyTests(unittest.TestCase):
                 {
                     "entryId": first["entry_id"],
                     "lemma": "claim",
-                    "morphology": {"lemma": "claim", "currentForm": "第三人称单数", "forms": []},
+                    "generatedExample": {"sentence": "She claims the prize.", "translation": "她领取奖品。"},
+                    "morphology": {"lemma": "claim", "currentForm": "第三人称单数", "ambiguous": False, "note": "", "forms": []},
                     "phonetic": "",
                     "partOfSpeech": "v.",
                     "contextualMeaning": "声称",
@@ -228,7 +233,8 @@ class VocabularyTests(unittest.TestCase):
                 {
                     "entryId": second["entry_id"],
                     "lemma": "evidence",
-                    "morphology": {"lemma": "evidence", "currentForm": "原形", "forms": []},
+                    "generatedExample": {"sentence": "The evidence is clear.", "translation": "证据很明确。"},
+                    "morphology": {"lemma": "evidence", "currentForm": "原形", "ambiguous": False, "note": "", "forms": []},
                     "phonetic": "",
                     "partOfSpeech": "n.",
                     "contextualMeaning": "证据",
@@ -251,7 +257,7 @@ class VocabularyTests(unittest.TestCase):
             ),
             patch(
                 "backend.app.services.vocabulary.chat_completion",
-                return_value=json.dumps(response, ensure_ascii=False),
+                side_effect=reply(json.dumps(response, ensure_ascii=False)),
             ),
         ):
             result = translate_queued_vocabulary()

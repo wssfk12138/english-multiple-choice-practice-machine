@@ -29,6 +29,11 @@ def validate_manifest(manifest):
         reviewed = change.get('reviewedBefore', [])
         if not isinstance(reviewed, list) or len(reviewed) > 10:
             raise ValueError('题库修正历史基线无效')
+        reviewed_hashes = change.get('reviewedHashes', [])
+        if (not isinstance(reviewed_hashes, list) or len(reviewed_hashes) > 20
+                or len(set(reviewed_hashes)) != len(reviewed_hashes)
+                or any(not re.fullmatch(r'[0-9a-f]{64}', value) for value in reviewed_hashes)):
+            raise ValueError('题库修正已审阅指纹无效')
         identities = []
         for unit in [change.get('before', {}), change.get('after', {}), *reviewed]:
             required = {*UNIT_FIELDS, 'shared.content_blocks', 'shared.directions', 'shared.candidates', 'questions'}
@@ -96,11 +101,20 @@ def preflight(connection, manifest):
         for unit in connection.execute('SELECT u.* FROM units u JOIN papers p ON p.id=u.paper_id WHERE u.external_key=? AND p.deleted_at IS NULL', (change['unitKey'],)):
             actual = read_unit(connection, unit)
             baselines = [change['before'], *change.get('reviewedBefore', [])]
-            errors = [] if any(not conflicts(actual, baseline, change['after']) for baseline in baselines) else conflicts(actual, change['before'], change['after'])
             revision = json.loads(unit['shared_data'] or '{}').get('content_revision')
+            actual_hash = digest(actual)
+            reviewed = change.get('reviewedBefore', [])
+            reviewed_hashes = set(change.get('reviewedHashes', []))
+            differs_from_canonical = bool(conflicts(actual, change['before'], change['after']))
+            accepted = differs_from_canonical and (
+                actual_hash in reviewed_hashes
+                or any(not conflicts(actual, baseline, change['after']) for baseline in reviewed)
+            )
+            errors = [] if accepted or any(not conflicts(actual, baseline, change['after']) for baseline in baselines) else conflicts(actual, change['before'], change['after'])
             records.append({'unitId': unit['id'], 'unitKey': change['unitKey'], 'actual': actual,
                 'conflicts': errors, 'change': change, 'contentChanged': actual != change['after'],
-                'needed': actual != change['after'] or revision != manifest['revision']})
+                'accepted': accepted, 'actualHash': actual_hash,
+                'needed': (revision != manifest['revision']) if accepted else (actual != change['after'] or revision != manifest['revision'])})
     return records
 
 
@@ -114,8 +128,10 @@ def apply(connection, manifest):
     if bad:
         raise ValueError('题库内容存在未审查差异，修正已停止：' + ', '.join(r['unitKey'] for r in bad))
     pending = [r for r in records if r['needed']]
+    content_pending = [r for r in pending if not r['accepted']]
+    accepted_pending = [r for r in pending if r['accepted']]
     session_ids = set()
-    for record in pending:
+    for record in content_pending:
         if not record['contentChanged']:
             continue
         uid = record['unitId']
@@ -129,8 +145,20 @@ def apply(connection, manifest):
     for record in pending:
         uid, target = record['unitId'], record['change']['after']
         receipt = connection.execute('SELECT after_hash FROM content_remediation_receipts WHERE unit_id=? AND revision=?', (uid, manifest['revision'])).fetchone()
-        if receipt and receipt['after_hash'] != digest(target):
+        allowed_hashes = {digest(target)}
+        if record['accepted']:
+            allowed_hashes.add(digest(record['actual']))
+        if receipt and receipt['after_hash'] not in allowed_hashes:
             raise ValueError('同一题库修订号的内容指纹发生变化')
+        if record['accepted']:
+            unit = connection.execute('SELECT * FROM units WHERE id=?', (uid,)).fetchone()
+            shared = json.loads(unit['shared_data'] or '{}')
+            shared['content_revision'] = manifest['revision']
+            connection.execute('UPDATE units SET shared_data=? WHERE id=?', (json.dumps(shared, ensure_ascii=False), uid))
+            historical = [dict(r) for r in connection.execute('SELECT w.* FROM wrong_stats w JOIN questions q ON q.id=w.question_id WHERE q.unit_id=?', (uid,))]
+            connection.execute('INSERT INTO content_remediation_receipts(unit_id,revision,before_hash,after_hash,historical_wrong_stats) VALUES(?,?,?,?,?) ON CONFLICT(unit_id,revision) DO NOTHING',
+                (uid, manifest['revision'], digest(record['actual']), digest(record['actual']), json.dumps(historical, ensure_ascii=False)))
+            continue
         unit = connection.execute('SELECT * FROM units WHERE id=?', (uid,)).fetchone()
         shared = json.loads(unit['shared_data'] or '{}')
         for key, value in target.items():
@@ -153,7 +181,7 @@ def apply(connection, manifest):
             (uid, manifest['revision'], digest(record['actual']), digest(target), json.dumps(historical, ensure_ascii=False)))
         if read_unit(connection, connection.execute('SELECT * FROM units WHERE id=?', (uid,)).fetchone()) != target:
             raise ValueError('题库修正写入校验失败')
-    return {'revision': manifest['revision'], 'units': len(pending), 'sessions': len(session_ids)}
+    return {'revision': manifest['revision'], 'units': len(content_pending), 'accepted': len(accepted_pending), 'sessions': len(session_ids)}
 
 
 def load_manifest(path: Path):

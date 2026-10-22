@@ -68,13 +68,20 @@ jobs:
           pnpm run build
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Prepare TTS assets
+        shell: pwsh
+        run: |
+          .\scripts\prepare-tts-assets.ps1 -Accents us
+          if (-not (Test-Path -LiteralPath "tts\en_US\model.onnx")) { throw "Public TTS model is missing." }
+          if (Test-Path -LiteralPath "tts\en_GB") { throw "Public build must not contain en_GB/Alan assets." }
+
       - name: Assemble package
         shell: pwsh
         run: |
           $stage = Join-Path $env:RUNNER_TEMP "package\english-practice-machine"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           $items = @(
-            "backend", "frontend\dist", "examples\bundled-banks", "run_app.py", "start.ps1", "setup.ps1",
+            "backend", "frontend\dist", "tts", "examples\bundled-banks", "run_app.py", "start.ps1", "setup.ps1",
             "requirements.txt", "README.md", "README.en.md", "LICENSE", "NOTICE.md", "AUTHORS.md"
           )
           foreach ($item in $items) {

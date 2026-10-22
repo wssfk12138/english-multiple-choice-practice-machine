@@ -17,6 +17,7 @@ import {
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, del, get } from '../api'
+import OptionSheet from './OptionSheet.vue'
 import { assistantSession } from '../services/assistantSession'
 import { agentInstructions, createDocument, documentStorage, outputName, runDocumentAgent } from '../services/documentAgent'
 import { saveAssistantDocument } from '../services/saveAssistantDocument'
@@ -54,8 +55,11 @@ type Attachment = {
   dataUrl: string
 }
 
+
+
 const router = useRouter()
 const { document: currentDocument, progress, messages, conversationId, input, loading, loadingData, attachments, reasoningEffort, models, conversations, error } = assistantSession
+const inputPlaceholder = '输入问题，Enter 发送，Shift + Enter 换行'
 
 
 const selectedModel = ref(localStorage.getItem('linjian-ai-model') || '')
@@ -150,15 +154,19 @@ const activeModel = computed(() =>
   models.value.find(item => modelValue(item) === selectedModel.value),
 )
 
-const groupedModels = computed(() => {
-  const groups = new Map<string, SelectorModel[]>()
-  for (const model of models.value) {
-    const current = groups.get(model.profile_name) || []
-    current.push(model)
-    groups.set(model.profile_name, current)
-  }
-  return [...groups.entries()].map(([name, items]) => ({ name, items }))
-})
+// 主题化选择弹层的扁平选项；所属配置名称作为辅助说明保留分组语义。
+const modelOptions = computed(() => models.value.map(model => ({
+  value: modelValue(model),
+  label: model.display_name || model.model_id,
+  hint: model.profile_name,
+})))
+
+const reasoningOptions = [
+  { value: '', label: '跟随配置' },
+  { value: 'low', label: '推理：低' },
+  { value: 'medium', label: '推理：中' },
+  { value: 'high', label: '推理：高' },
+]
 
 async function scrollToBottom() {
   await nextTick()
@@ -246,6 +254,7 @@ function startNewConversation() {
   messages.value = []
   if (window.innerWidth <= 820) historyOpen.value = false
   input.value = ''
+  reasoningEffort.value = ''
 }
 
 async function openConversation(id: number) {
@@ -318,8 +327,8 @@ async function sendMessage() {
         profile_id: selection.profile_id,
         model: selection.model_id,
         message: text,
-        ...(reasoningEffort.value ? { reasoning_effort: reasoningEffort.value } : {}),
         ...(attachmentPayload.length ? { attachments: attachmentPayload } : {}),
+        ...(reasoningEffort.value ? { reasoning_effort: reasoningEffort.value } : {}),
       }),
       signal: requestController.signal,
     })
@@ -505,6 +514,14 @@ onBeforeUnmount(() => {
         <div v-else class="ai-history-empty">还没有保存的对话</div>
       </aside>
 
+      <button
+        v-if="historyOpen"
+        class="ai-history-dismiss-area"
+        type="button"
+        aria-label="返回当前对话"
+        @click="historyOpen=false"
+      />
+
       <div class="ai-chat-panel">
         <header class="ai-chat-toolbar">
           <div>
@@ -517,28 +534,7 @@ onBeforeUnmount(() => {
             >
               <PanelLeftOpen :size="19" />
             </button>
-            <span class="ai-assistant-icon"><Bot :size="19" /></span>
-            <span><strong>{{ conversationId ? '继续对话' : '新的学习对话' }}</strong><small>回答由所选 AI 模型生成</small></span>
-          </div>
-          <div class="ai-model-control">
-            <label for="assistant-model">当前模型</label>
-            <select
-              id="assistant-model"
-              v-model="selectedModel"
-              :disabled="!models.length || loading"
-              aria-label="切换对话模型"
-            >
-              <option v-if="!models.length" value="">暂无可用模型</option>
-              <optgroup v-for="group in groupedModels" :key="group.name" :label="group.name">
-                <option v-for="model in group.items" :key="modelValue(model)" :value="modelValue(model)">
-                  {{ model.display_name || model.model_id }}
-                </option>
-              </optgroup>
-            </select>
-            <label for="assistant-reasoning">推理强度</label>
-            <select id="assistant-reasoning" v-model="reasoningEffort" :disabled="loading">
-              <option value="">跟随配置</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option>
-            </select>
+            <span><strong>{{ conversationId ? '继续对话' : '新的学习对话' }}</strong></span>
           </div>
         </header>
 
@@ -612,7 +608,7 @@ onBeforeUnmount(() => {
             rows="3"
             maxlength="20000"
             :disabled="!models.length"
-            placeholder="输入问题，Enter 发送，Shift + Enter 换行"
+            :placeholder="inputPlaceholder"
             aria-label="向 AI 学习助手提问"
             @keydown="handleInputKey"
           />
@@ -624,7 +620,7 @@ onBeforeUnmount(() => {
             multiple
             @change="onFilesChosen"
           >
-          <div>
+          <div class="ai-composer-actions">
             <button
               class="ai-attach-button"
               type="button"
@@ -635,7 +631,25 @@ onBeforeUnmount(() => {
             >
               <Plus :size="18" />
             </button>
-            <small>{{ activeModel ? `${activeModel.profile_name} / ${activeModel.display_name || activeModel.model_id}` : '尚未选择模型' }}</small>
+            <div class="ai-model-control">
+              <OptionSheet
+                v-model="selectedModel"
+                :items="modelOptions"
+                title="切换对话模型"
+                searchable
+                :placeholder="models.length ? '选择对话模型' : '暂无可用模型'"
+                :disabled="!models.length || loading"
+              />
+            </div>
+            <div class="ai-model-control ai-reasoning-control">
+              <OptionSheet
+                v-model="reasoningEffort"
+                :items="reasoningOptions"
+                title="本次对话推理强度"
+                :placeholder="reasoningEffort ? '' : '跟随配置'"
+                :disabled="loading"
+              />
+            </div>
             <button
               v-if="loading"
               class="ai-send-button stop"
@@ -679,4 +693,34 @@ onBeforeUnmount(() => {
 .ai-document-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 0; overflow-wrap: anywhere; }
 .ai-document-bar span { flex: 1; min-width: 0; }
 .ai-tool-progress { max-height: 140px; overflow: auto; font-size: 12px; padding: 6px 0; }
+</style>
+
+<style scoped>
+.ai-composer-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.ai-composer-actions .ai-model-control{min-width:0;flex:1 1 180px;max-width:340px}
+.ai-composer-actions .ai-reasoning-control{flex:0 1 160px}
+.ai-model-control :deep(.option-sheet-trigger){width:100%;min-width:0}
+.ai-history-dismiss-area{display:none}
+@media(max-width:820px){.ai-history-dismiss-area{display:block;position:absolute;inset:0 0 0 280px;z-index:6;border:0;padding:0;background:color-mix(in srgb,var(--ink) 10%,transparent)}}
+</style>
+<style scoped>
+.ai-history-dismiss-area{left:min(300px,88%)}
+@media(max-height:600px){
+  .ai-assistant-page{height:var(--app-vh);min-height:0;padding:12px 14px}
+  .ai-page-head{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+  .ai-page-head h1{font-size:24px;margin:0}
+  .ai-page-head .lead{display:none}
+  .ai-page-head .button{margin:0;min-height:36px;padding:6px 10px}
+  .ai-chat-toolbar{min-height:44px;padding:4px 10px}
+  .ai-messages{padding:8px 12px}
+  .ai-empty{min-height:0;padding:8px}
+  .ai-composer{margin-bottom:8px;padding:6px}
+  .ai-composer textarea{min-height:40px;max-height:90px}
+}
+@media(max-height:600px) and (max-width:980px){.ai-assistant-page{height:calc(var(--app-vh) - 68px)}}
+@media(max-height:360px){
+  .ai-assistant-page{height:auto;min-height:0;overflow:visible;padding-bottom:84px}
+  .ai-page-head{flex-wrap:wrap}
+  .ai-workspace{flex:none;height:480px;min-height:480px}
+}
 </style>

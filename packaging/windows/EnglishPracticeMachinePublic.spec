@@ -1,19 +1,25 @@
 from pathlib import Path
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
 
 project_root = Path(SPECPATH).parents[1]
 name = 'EnglishPracticeMachinePublic'
+if (project_root / 'tts/en_GB').exists():
+    raise RuntimeError('Public build must not contain en_GB/Alan assets')
+if not (project_root / 'tts/en_US/model.onnx').is_file():
+    raise RuntimeError('Prepare the public US voice before packaging')
 a = Analysis(
     [str(project_root / 'run_app.py')],
     pathex=[str(project_root)],
-    binaries=[],
+    binaries=collect_dynamic_libs('sherpa_onnx'),
     datas=[
+        (str(project_root / 'tts/en_US'), 'tts/en_US'),
+        *collect_data_files('sherpa_onnx'),
         (str(project_root / 'frontend/dist'), 'frontend/dist'),
         (str(project_root / 'docs/schemas/esq-1.0.schema.json'), 'docs/schemas'),
         (str(project_root / 'backend/app/services/convert_word.ps1'), 'backend/app/services'),
         (str(project_root / 'examples/bundled-banks'), 'examples/bundled-banks'),
     ],
-    hiddenimports=['backend.app.main'] + collect_submodules('zeroconf'),
+    hiddenimports=['backend.app.main'] + collect_submodules('zeroconf') + collect_submodules('sherpa_onnx'),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[str(project_root / 'packaging/windows/runtime_streams.py')],

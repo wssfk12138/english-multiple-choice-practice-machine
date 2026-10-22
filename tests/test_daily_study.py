@@ -26,11 +26,11 @@ class DailyStudyTests(unittest.TestCase):
         self.db.close()
 
     def test_catalog_orders_by_recency_and_frequency_with_identity(self):
-        result = daily_study.daily_study_catalog(self.db)
+        result = daily_study.daily_study_catalog(self.db, status='all')
         self.assertEqual([item['term'] for item in result['items']], ['corruption', 'zealous', 'abet'])
-        self.assertEqual(result['items'][0]['identity'], 'nt:corruption')
+        self.assertEqual(result['items'][0]['identity'], self.db.execute("SELECT daily_study_identity FROM vocabulary_entries WHERE term='corruption'").fetchone()[0])
         self.assertEqual(json.loads(result['scope_key'])[0], 'daily-study')
-        self.assertTrue(result['revision'].startswith('v2:'))
+        self.assertTrue(result['revision'].startswith('v3:'))
 
     def test_catalog_filters_status_and_search(self):
         review = daily_study.daily_study_catalog(self.db, status='review')
@@ -57,17 +57,17 @@ class DailyStudyTests(unittest.TestCase):
             (entry_id, unit),
         )
         self.db.commit()
-        scoped = daily_study.daily_study_catalog(self.db, scope='current')
+        scoped = daily_study.daily_study_catalog(self.db, status='all', scope='current')
         self.assertEqual([item['term'] for item in scoped['items']], ['corruption'])
-        self.assertEqual(json.loads(scoped['scope_key'])[2], ['profile', profile])
+        self.assertEqual(json.loads(scoped['scope_key'])[3][0], profile)
         metadata = daily_study.daily_study_metadata(self.db, 'all', '', 'current')
-        catalog = daily_study.daily_study_catalog(self.db, scope='current')
+        catalog = daily_study.daily_study_catalog(self.db, status='all', scope='current')
         self.assertEqual(metadata, {key: catalog[key] for key in ('scope_key', 'revision')})
 
     def test_detail_exposes_daily_study_identity(self):
         entry_id = self.db.execute("SELECT id FROM vocabulary_entries WHERE term='corruption'").fetchone()[0]
         payload = vocabulary_service._serialize_entry(self.db, entry_id)
-        self.assertEqual(payload['daily_study_identity'], 'nt:corruption')
+        self.assertEqual(payload['daily_study_identity'], self.db.execute('SELECT daily_study_identity FROM vocabulary_entries WHERE id=?', (entry_id,)).fetchone()[0])
 
     def test_router_routes_resolve_before_entry_param(self):
         catalog = vocabulary_router.daily_study_catalog(status='all', search='', scope='all', connection=self.db)

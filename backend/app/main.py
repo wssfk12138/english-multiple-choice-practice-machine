@@ -20,6 +20,7 @@ from .routers import (
     question_bank_profiles,
     question_banks,
     remote_question_banks,
+    speech,
     sync,
     updates,
     vocabulary,
@@ -42,12 +43,9 @@ async def lifespan(_: FastAPI):
     with connect() as connection:
         ensure_ai_model_catalog(connection)
         clean_machine_meanings(connection)
-        connection.execute("UPDATE vocabulary_enrichment_jobs SET state='queued' WHERE state='inflight'")
-        connection.execute(
-            "UPDATE vocabulary_entries SET translation_status = 'queued', translation_error = '' "
-            "WHERE user_edited = 0 AND translation_status = 'translating'"
-        )
         connection.commit()
+        from .services.vocabulary_requests import recover
+        recover(connection)
         purge_expired(connection)
         repair_published_listening_assets(connection)
     threading.Thread(
@@ -79,6 +77,7 @@ app.include_router(wrong.router, prefix="/api")
 app.include_router(imports.router, prefix="/api")
 app.include_router(question_banks.router, prefix="/api")
 app.include_router(question_bank_profiles.router, prefix="/api")
+app.include_router(speech.router, prefix="/api")
 app.include_router(remote_question_banks.router, prefix="/api")
 app.include_router(updates.router, prefix="/api")
 app.include_router(ai.router, prefix="/api")

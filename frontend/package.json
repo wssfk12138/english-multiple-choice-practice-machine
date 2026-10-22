@@ -12,7 +12,9 @@
     "build": "vue-tsc --noEmit -p tsconfig.app.json && vite build",
     "test:diagnostics": "node --experimental-strip-types tests/diagnostics-sanitizer.mjs",
     "test:remote-question-banks": "cd .. && python -m unittest tests.test_question_bank_catalog",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:daily-study-session": "node tests/daily-study-session.mjs",
+    "test:desktop-ui": "node tests/desktop-ui.mjs"
   },
   "dependencies": {
     "@formkit/auto-animate": "^0.9.0",

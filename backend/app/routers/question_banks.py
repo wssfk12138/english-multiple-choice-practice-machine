@@ -4,6 +4,7 @@ import json
 import sqlite3
 import uuid
 from pathlib import Path
+from pydantic import BaseModel, Field
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
@@ -57,6 +58,7 @@ def create_question_bank_import(
     stored_path: Path,
     filename: str,
     profile_id: int | None = None,
+    *, package: dict | None = None, commit: bool = True,
 ) -> dict:
     selected_profile_id = profile_id or get_active_profile_id(connection)
     if not connection.execute(
@@ -64,7 +66,7 @@ def create_question_bank_import(
         (selected_profile_id,),
     ).fetchone():
         raise _error("PROFILE_NOT_FOUND", "目标题库配置不存在")
-    package = load_esq_package(stored_path)
+    package = package if package is not None else load_esq_package(stored_path)
     preview = build_preview(connection, package, profile_id=selected_profile_id)
     serializable = {**package, "source_path": str(stored_path)}
     detected_year = package["papers"][0]["year"] if package["papers"] else None
@@ -83,7 +85,8 @@ def create_question_bank_import(
             json.dumps(serializable, ensure_ascii=False),
         ),
     )
-    connection.commit()
+    if commit:
+        connection.commit()
     return {
         "id": cursor.lastrowid,
         "filename": filename,
@@ -114,35 +117,34 @@ def list_question_bank_imports(
 
 
 @router.post("/imports")
-async def upload_question_bank(
-    file: UploadFile = File(...),
-    profile_id: int | None = Form(default=None),
-    connection: sqlite3.Connection = Depends(get_db),
-) -> dict:
-    if not file.filename or Path(file.filename).suffix.lower() not in {".esq", ".zip"}:
-        raise _error("UNSUPPORTED_FILE", "请选择 .esq 或 .zip 题库包")
-    stored_path = UPLOAD_DIR / f"{uuid.uuid4().hex}.esq"
-    size = 0
-    try:
-        with stored_path.open("wb") as target:
-            while True:
-                chunk = await file.read(1024 * 1024)
-                if not chunk:
-                    break
-                size += len(chunk)
-                if size > MAX_PACKAGE_BYTES:
-                    raise _error("FILE_TOO_LARGE", "ESQ 文件不能超过 2 GiB")
-                target.write(chunk)
-        return create_question_bank_import(connection, stored_path, file.filename, profile_id)
-    except EsqValidationError as error:
-        stored_path.unlink(missing_ok=True)
-        raise _error("VALIDATION_ERROR", "题库包校验失败", error.details) from error
-    except HTTPException:
-        stored_path.unlink(missing_ok=True)
-        raise
-    except Exception as error:
-        stored_path.unlink(missing_ok=True)
-        raise _error("IMPORT_FAILED", "题库包导入失败，请检查文件内容") from error
+async def upload_question_bank(file: UploadFile = File(...), profile_id: int | None = Form(default=None),
+                               connection: sqlite3.Connection = Depends(get_db)) -> dict:
+    from starlette.concurrency import run_in_threadpool
+    from ..services import esq_stage
+    stage_id = await esq_stage.upload(connection, UPLOAD_DIR, file, profile_id)
+    return await run_in_threadpool(esq_stage.resume, connection, UPLOAD_DIR, stage_id)
+
+
+class StagedEsqRequest(BaseModel):
+    stage_id: str = Field(pattern=r'^[a-f0-9]{32}$')
+
+
+@router.get('/imports/staged')
+def staged_imports(connection: sqlite3.Connection = Depends(get_db)) -> list[dict]:
+    from ..services.esq_stage import pending
+    return pending(connection, UPLOAD_DIR)
+
+
+@router.post('/imports/staged/resume')
+def resume_staged_import(request: StagedEsqRequest, connection: sqlite3.Connection = Depends(get_db)) -> dict:
+    from ..services.esq_stage import resume
+    return resume(connection, UPLOAD_DIR, request.stage_id)
+
+
+@router.post('/imports/staged/discard')
+def discard_staged_import(request: StagedEsqRequest, connection: sqlite3.Connection = Depends(get_db)) -> dict:
+    from ..services.esq_stage import discard
+    return discard(connection, UPLOAD_DIR, request.stage_id)
 
 
 @router.get("/imports/{job_id}")

@@ -11,7 +11,7 @@ const compile = s => ts.transpileModule(s, {compilerOptions:{module:ts.ModuleKin
 const queueModule = { exports:{} }; vm.runInNewContext(compile(read('vocabulary-due-queue.ts')), queueModule)
 const source = read('views/VocabularyView.vue').split('<script setup lang="ts">')[1].split('</script>')[0]
 const ast = ts.createSourceFile('view.ts', source, ts.ScriptTarget.Latest, true)
-const names = ['clearNotice','showNotice','newReviewCommandId','persistDueQueue','reviewRevision','refreshDueQueue','dueQueueUrl','duePageSignature','extractReviewRows','setScheduledWords','applyDueQueue','dueFillWanted','finishFill','readWholeDueQueue','fillDueQueue','topUpDueQueue','fillDueQueueForRating','loadDueQueue','applyCounts','displayCount','refreshReviewOnForeground','rate']
+const names = ['clearNotice','showNotice','newReviewCommandId','persistDueQueue','reviewRevision','refreshDueQueue','dueQueueUrl','duePageSignature','extractReviewRows','setScheduledWords','applyDueQueue','dueFillWanted','finishFill','readWholeDueQueue','fillDueQueue','topUpDueQueue','fillDueQueueForRating','loadDueQueue','applyCounts','displayCount','refreshReviewOnForeground','rate','markReviewGroupRated']
 const functions = ast.statements.filter(s => ts.isFunctionDeclaration(s) && names.includes(s.name?.text)).map(s => s.getText(ast)).join('\n')
 const prelude = `
 let dueQueue = reconcileDueQueue(null, []);
@@ -19,6 +19,8 @@ let dueQueueStorageKey = '';
 let dueRefreshPromise: Promise<void>|null = null;
 let reviewDisposed = false;
 let reviewCommandId = '';
+let discriminationToken = 0;
+function schedulePersistReviewSnapshot() {}
 let noticeTimer: ReturnType<typeof setTimeout>|null = null;
 let reviewLoadToken = 0;
 let dueQueueTimer: ReturnType<typeof setTimeout>|null = null;
@@ -44,6 +46,7 @@ const value = v => ({value:v})
 function setup() {
   const ctx = { ...queueModule.exports, exports:{}, Map, JSON, String, Date, setTimeout, clearTimeout,
     currentBankScope:false, reviewMode:value(true), reviewKind:value('scheduled'), reviewSaving:value(false), reviewIndex:value(0), reveal:value(true), error:value(''), notice:value(''), scheduledWords:value([word(1),word(2)]), countsLoaded:value(false), reviewLoading:value(false), listLoaded:value(false), listRevision:value(''), reviewDetails:value({}),
+    ratedReviewKeys:value([]),reviewGroupPlan:value([]),dismissedReviewGroups:value([]),completedReviewGroupId:value(''),completedReviewGroup:value(null),discriminationOpen:value(false),
     counts:value({}), document:{visibilityState:'visible'}, localStorage:{getItem:()=>null,setItem:()=>{}}, load:async()=>{},
     persistListSnapshot:()=>{}, refreshVocabularyStatus:async()=>({counts:{},revision:''}) }
   ctx.reviewItems = {get value(){return ctx.scheduledWords.value}}
@@ -107,4 +110,12 @@ function setup() {
  assert.equal(posts,1);assert.equal(c.reviewWord.value.id,1);assert.equal(c.reviewSaving.value,false);assert.equal(c.reveal.value,false)
 }
 
-console.log('PASS due review: deleted/synced cards, failed save, overlapping refresh, duplicate rating, foreground, disposal and 409 recovery')
+{
+ // 恢复队首的请求尚未返回时先等待；不能让旧列表落在评分提交之后。
+ const c=setup();let release;let first=true;c.get=()=>first?(first=false,new Promise(resolve=>release=resolve)):Promise.resolve({items:c.words})
+ const refreshing=c.api.refreshDueQueue();const rating=c.api.rate('hard')
+ await Promise.resolve();assert.equal(c.posts.length,0)
+ release({items:[word(1),word(2)]});await refreshing;await rating
+ assert.equal(c.posts.length,1);assert.equal(c.reviewWord.value.id,2)
+}
+console.log('PASS due review: deleted/synced cards, failed save, overlapping refresh, duplicate rating, foreground, disposal, 409 recovery and restored-head wait')

@@ -31,7 +31,7 @@ const props = withDefaults(defineProps<{
   tracks: () => [],
   seekable: true,
   timerPaused: false,
-  resumeOnTimerContinue: false,
+  resumeOnTimerContinue: true,
   currentQuestionNumber: null,
   answeredCount: 0,
   questionCount: 0,
@@ -196,7 +196,7 @@ function preventTimedSeeking() {
 
 watch(trackSignature, (next, previous) => {
   if (next === previous) return
-  const shouldAutoplay = Boolean(previous && next)
+  const shouldAutoplay = !props.timerPaused && Boolean(previous && next)
   if (selectedIndex.value !== 0) {
     pendingAutoplay.value = shouldAutoplay
     selectedIndex.value = 0

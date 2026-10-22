@@ -9,8 +9,8 @@ const { loadVocabDisplayConfig, saveVocabDisplayConfig, VOCAB_DISPLAY_OPTIONS } 
 values.set('vocab-display-config', JSON.stringify({sentence:false,contextual:false,morphology:false,note:'invalid'}))
 let config = loadVocabDisplayConfig()
 assert.equal(config.source_sentence,false)
-// 批次3按安卓横屏重排显示项：contextual 不再是可配置键，sentence 保留为旧名兼容。
-assert.equal(config.contextual,undefined)
+// 语境释义重新成为可配置项，保留历史 false 选择与 sentence 旧名兼容。
+assert.equal(config.contextual,false)
 assert.equal(config.morphology,false)
 assert.equal(config.note,true)
 config.model_sentence=true
@@ -21,5 +21,5 @@ values.set('vocab-display-config','null')
 assert.equal(loadVocabDisplayConfig().common_meaning,true)
 values.set('vocab-display-config','broken')
 assert.equal(loadVocabDisplayConfig().source_sentence,true)
-assert.equal(VOCAB_DISPLAY_OPTIONS.length,11)
+assert.equal(VOCAB_DISPLAY_OPTIONS.length,12)
 console.log('PASS vocabulary display migration: old preferences, invalid values, persisted fields')

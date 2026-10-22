@@ -18,7 +18,15 @@ assert.equal(validSourceSentence({...a,context_sentence:'Unlike'}),false)
 const result = vocabularyEnhancements({lemma:'go',morphology:{currentForm:'过去式',forms:[{label:'过去分词',word:'gone'},null,{label:2,word:'bad'}]},generatedExample:{sentence:'She went home.',translation:'她回家了。'}},false)
 assert.equal(result.morphology.forms.length,1)
 assert.equal(result.generatedExample.sentence,'She went home.')
-assert.equal(Object.keys(vocabularyEnhancements({generatedExample:{sentence:'fake'}},true).generatedExample).length,0)
+const englishLabels = vocabularyEnhancements({morphology:{lemma:'go',currentForm:'past tense',forms:[{label:'base form',word:'go'},{label:'past participle',word:'gone'}]}},true)
+assert.equal(englishLabels.morphology.currentForm,'过去式')
+assert.deepEqual(JSON.parse(JSON.stringify(englishLabels.morphology.forms)),[{label:'原形',rawLabel:'base form',word:'go'},{label:'过去分词',rawLabel:'past participle',word:'gone'}])
+assert.equal(vocabularyEnhancements({generatedExample:{sentence:'She went home.',translation:'她回家了。'}},true).generatedExample.sentence,'She went home.')
+assert.equal(context.exports.validVocabularyEnhancements({morphology:{lemma:'go',currentForm:'过去式',ambiguous:false,note:'',forms:[]},generatedExample:{sentence:'She went home.',translation:'她回家了。'}},'went',true),true)
+assert.equal(context.exports.validVocabularyEnhancements({morphology:{lemma:'go',currentForm:'过去式',ambiguous:false,note:'',forms:[]},generatedExample:{}},'went',true),false)
+for(const label of ['单数','复数','不可数','原形','第三人称单数','过去式','现在分词','过去分词','比较级','最高级']) assert.equal(context.exports.morphologyLabel(label),label)
+assert.equal(context.exports.morphologyLabel('uncountable noun'),'不可数')
+assert.equal(context.exports.morphologyLabel('unknown'),'词形待确认')
 console.log('PASS latest encounter time, sync ties, isolated options, context binding, bounded model fields')
 
 
@@ -34,3 +42,11 @@ assert.equal(validSourceSentence({...a, context_sentence:'went.', source_kind:'o
 assert.equal(validSourceSentence({surface_form:'well-known',context_sentence:'She is well-known.'}), true)
 assert.equal(validSourceSentence({surface_form:"don't",context_sentence:'They don’t care.'}), true)
 console.log('PASS selected occurrence offset, explicit source categories, short full sentences and punctuation')
+
+// A fixed phrase is a known, unchanged form, not an ambiguous unknown label.
+const fixedPhrase={morphology:{lemma:'as a result',currentForm:'固定短语',ambiguous:false,note:'连接结果的固定短语。',forms:[]},generatedExample:{sentence:'As a result, we stayed home.',translation:'因此，我们待在家里。'}}
+assert.equal(context.exports.morphologyLabel('fixed phrase'),'固定短语')
+assert.equal(context.exports.validVocabularyEnhancements(fixedPhrase,'As a result',false),true)
+assert.equal(context.exports.validVocabularyEnhancements({...fixedPhrase,morphology:{...fixedPhrase.morphology,currentForm:'unrecognized form'}},'As a result',false),false)
+assert.equal(context.exports.validVocabularyEnhancements({...fixedPhrase,generatedExample:{sentence:'We stayed home.',translation:'我们待在家里。'}},'As a result',false),false)
+console.log('PASS valid fixed phrases retain required fields, source term and example protections')

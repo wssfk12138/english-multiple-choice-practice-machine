@@ -4,6 +4,7 @@ import {
   CloudDownload,
   Database,
   Download,
+  Eye,
   ExternalLink,
   FileWarning,
   Import,
@@ -14,9 +15,14 @@ import {
   Trash2,
 } from 'lucide-vue-next'
 import { useThemeState } from '../composables/useThemeState'
+import { VOCAB_DISPLAY_OPTIONS, loadVocabDisplayConfig } from '../services/vocabularyDisplayConfig'
 import '../settings-hub.css'
 
 const dark = useThemeState()
+function vocabularySummary() {
+  const config = loadVocabDisplayConfig()
+  return `已开启 ${VOCAB_DISPLAY_OPTIONS.filter(option => config[option.key]).length} 项`
+}
 
 function toggleTheme() {
   dark.value = !document.documentElement.classList.contains('dark')
@@ -62,6 +68,11 @@ const groups = [
       <h2 id="hub-appearance-title" class="settings-hub-group-title">外观与显示</h2>
       <div class="settings-hub-rows">
         <div class="settings-hub-row"><span class="settings-hub-row-icon"><Moon :size="19" /></span><strong>深色模式</strong><button class="settings-theme-switch" type="button" role="switch" :aria-checked="dark" aria-label="深色模式" @click="toggleTheme"><span /></button></div>
+        <RouterLink class="settings-hub-row link" to="/settings/vocabulary">
+          <span class="settings-hub-row-icon"><Eye :size="19" /></span>
+          <span class="settings-hub-row-copy"><strong>单词本设置</strong><small>{{ vocabularySummary() }}</small></span>
+          <b class="settings-hub-chevron" aria-hidden="true">›</b>
+        </RouterLink>
       </div>
     </section>
 

@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch, nextTick } from 'vue'
 import VocabularyEnrichment from './VocabularyEnrichment.vue'
+import { hasStudyField } from '../services/dailyStudyContent'
 import type { VocabDisplayConfig } from '../services/vocabularyDisplayConfig'
-const props = withDefaults(defineProps<{ entry: any; config: VocabDisplayConfig; expanded?: boolean; expansionToken?: number }>(), { expanded: true })
+const props = withDefaults(defineProps<{ entry: any; config: VocabDisplayConfig; expanded?: boolean; expansionToken?: number; staticContent?: boolean }>(), { expanded: true, staticContent: false })
 const root = ref<HTMLElement>()
 watch(() => [props.entry.id, props.expansionToken, props.expanded], async () => {
   await nextTick()
@@ -17,7 +18,7 @@ const groups = computed(() => [
   { key: 'similar_forms', label: '形近词辨析', list: [...(props.entry.local_similar || []).map((item: any) => ({ ...item, local: true })), ...(props.entry.similar_forms || [])] },
   { key: 'memory_hint', label: '记忆提示', text: props.entry.memory_hint },
   { key: 'note', label: '我的笔记', text: props.entry.note },
-  ].filter(group => (props.config[group.key as keyof VocabDisplayConfig]) && (group.text || group.list?.length)))
+  ].filter(group => (props.config[group.key as keyof VocabDisplayConfig]) && (props.staticContent ? hasStudyField(props.entry, group.key as keyof VocabDisplayConfig) : group.text || group.list?.length)))
 </script>
 <template>
   <div ref="root" class="vocab-memory-content">
@@ -25,13 +26,14 @@ const groups = computed(() => [
       <div class="review-meaning-heading"><small v-if="config.common_meaning">常用释义</small><span v-if="config.part_of_speech && entry.part_of_speech" class="review-part-of-speech">{{ entry.part_of_speech }}</span><span v-if="config.phonetic && entry.phonetic" class="review-phonetic">{{ entry.phonetic }}</span></div>
       <strong v-if="config.common_meaning">{{ entry.common_meaning || entry.contextual_meaning || '释义待补充' }}</strong>
     </section>
+    <section v-if="config.contextual && entry.contextual_meaning" class="memory-layer memory-layer-static contextual-meaning"><h4>语境释义</h4><p>{{ entry.contextual_meaning }}</p></section>
     <template v-for="group in groups" :key="group.key">
-    <details v-if="!group.source" class="memory-layer" :open="props.expanded">
-      <summary>{{ group.label }}</summary>
-      <VocabularyEnrichment v-if="group.key === 'morphology'" :entry="entry" :show-morphology="true" :show-sentence="false" />
+    <component :is="props.staticContent ? 'section' : 'details'" v-if="!group.source" class="memory-layer" :open="props.staticContent ? undefined : props.expanded">
+      <component :is="props.staticContent ? 'h4' : 'summary'">{{ group.label }}</component>
+      <VocabularyEnrichment v-if="group.key === 'morphology'" :entry="entry" :show-morphology="true" :show-sentence="false" :complete-morphology="props.staticContent" />
       <ul v-else-if="group.list" class="discrimination-list"><li v-for="(item, index) in group.list" :key="index"><strong>{{ item.word }}</strong><span>{{ item.note }}<em v-if="item.local" class="source-tag">本地</em></span></li></ul>
       <template v-else><p>{{ group.text }}</p><p v-if="group.translation">{{ group.translation }}</p></template>
-    </details>
+    </component>
     <section v-else class="memory-layer memory-layer-static">
       <h4>{{ group.label }}</h4>
       <p>{{ group.text }}</p><small v-if="entry.occurrences?.length">{{ entry.occurrences[0].year || '未知年份' }} · {{ entry.occurrences[0].unit_title || entry.occurrences[0].unit_type || '' }}</small>

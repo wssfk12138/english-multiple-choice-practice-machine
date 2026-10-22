@@ -863,6 +863,13 @@ def _run_migrations(connection: sqlite3.Connection) -> None:
             "INSERT INTO app_migrations (migration_key) VALUES ('wrong-current-pool-v1')"
         )
 
+    from .services.daily_study_identity import migrate as migrate_daily_study
+    migrate_daily_study(connection)
+    from .services.vocabulary_requests import migrate as migrate_vocabulary_requests
+    migrate_vocabulary_requests(connection)
+    from .services.esq_stage import migrate as migrate_esq_stages
+    migrate_esq_stages(connection)
+
 
 def initialize_database() -> None:
     with closing(connect()) as connection, connection:

@@ -2,6 +2,10 @@
 import { confirmDialog } from '../platform/dialogs'
 import VocabularyMemoryContent from '../components/VocabularyMemoryContent.vue'
 import VocabularyDisplaySettings from '../components/VocabularyDisplaySettings.vue'
+import PronunciationButtons from '../components/PronunciationButtons.vue'
+import VocabularyTerm from '../components/VocabularyTerm.vue'
+import VocabularyRequestNotice from '../components/VocabularyRequestNotice.vue'
+import { planReviewGroups, reviewGroupKey, spellingDiff } from '../vocabulary-review-groups'
 import { BookOpen, BookOpenCheck, Check, ChevronDown, RefreshCw, Search, Settings, Star, Trash2 } from 'lucide-vue-next'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -15,9 +19,10 @@ const router = useRouter()
 const items = ref<any[]>([])
 const counts = ref<any>({ total:0, frequent:0, mastered:0, pending:0, review:0 })
 const selected = ref<any>(null)
-const filter = ref(route.query.review === 'scheduled' ? 'review' : 'all')
+function showsLemma(entry: any) { return Boolean(entry?.lemma) && String(entry.lemma).toLowerCase() !== String(entry.term).toLowerCase() }
+const filter = ref(String(route.query.studyStatus || (route.query.review === 'scheduled' ? 'review' : 'all')))
 const currentBankScope = route.query.scope === 'current'
-const search = ref('')
+const search = ref(String(route.query.studySearch || ''))
 const error = ref('')
 const notice = ref('')
 let noticeTimer: ReturnType<typeof setTimeout> | null = null
@@ -51,6 +56,26 @@ const reveal = ref(false)
 const reviewIndex = ref(0)
 const scheduledWords = ref<any[]>([])
 const reinforcementWords = ref<any[]>([])
+// Groups are planned over a stable session snapshot. Rated words stay in the
+// snapshot so the optional comparison survives their removal from the queue.
+const reviewGroupSource = ref<any[]>([])
+const ratedReviewKeys = ref<string[]>([])
+const dismissedReviewGroups = ref<string[]>([])
+const completedReviewGroupId = ref('')
+const discriminationOpen = ref(false)
+const discriminationLoading = ref(false)
+const discriminationMembers = ref<any[]>([])
+let discriminationToken = 0
+const discriminationPanel = ref<HTMLElement>()
+let discriminationOpener: HTMLElement | null = null
+function discriminationKeys(event: KeyboardEvent) {
+  if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeReviewDiscrimination() }
+  if (event.key !== 'Tab') return
+  const controls = [...(discriminationPanel.value?.querySelectorAll<HTMLElement>('button:not(:disabled)') || [])]
+  const first = controls[0], last = controls.at(-1)
+  if (event.shiftKey && (document.activeElement === first || document.activeElement === discriminationPanel.value)) { event.preventDefault(); last?.focus() }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+}
 // 到期队列与巩固候选只带回清单列，卡片成为当前卡时再按需读取该词的完整详情。
 const reviewDetails = ref<Record<string, any>>({})
 const reviewDetailError = ref('')
@@ -302,6 +327,7 @@ const PAGE_SIZE = 31
 const hasMore = ref(false)
 const loadingMore = ref(false)
 const listSentinel = ref<HTMLElement | null>(null)
+const listScroller = ref<HTMLElement | null>(null)
 let listObserver: IntersectionObserver | null = null
 // 首屏读到数据之前不得渲染终态：“正在读取”与“确实没有单词”必须可区分。
 // 否则一次慢响应或瞬时失败会被直接读成“0 个单词”，与数据是否完整无关。
@@ -322,7 +348,7 @@ function displayCount(value: unknown) {
 }
 function listUrl(limitClause: string) {
   const projection = ''
-  return `/vocabulary?status=${filter.value}&search=${encodeURIComponent(search.value)}${currentBankScope ? '&scope=current' : ''}&${limitClause}${projection}`
+  return `/vocabulary?projection=summary&status=${filter.value}&search=${encodeURIComponent(search.value)}${currentBankScope ? '&scope=current' : ''}&${limitClause}${projection}`
 }
 function vocabularyStatusUrl() {
   return `/vocabulary/status${currentBankScope ? '?scope=current' : ''}`
@@ -363,6 +389,7 @@ function persistListSnapshot() {
 }
 
 function vocabularyScrollElement(): Element | null {
+  if (listScroller.value && listScroller.value.scrollHeight > listScroller.value.clientHeight + 1) return listScroller.value
   const page = document.querySelector('.vocabulary-page')
   if (page && page.scrollHeight > page.clientHeight + 1) return page
   return document.scrollingElement
@@ -405,6 +432,81 @@ function snapshotOf(word: any) {
 function refreshReviewSnapshot() {
   reviewSnapshot.value = snapshotOf(reviewWord.value)
 }
+const reviewGroupPlan = computed(() => reviewKind.value === 'scheduled' ? planReviewGroups(reviewGroupSource.value) : [])
+const currentReviewGroup = computed(() => {
+  const key = reviewWord.value ? wordKey(reviewWord.value) : ''
+  return key ? reviewGroupPlan.value.find(group => group.keys.includes(key)) || null : null
+})
+const currentReviewGroupPosition = computed(() => {
+  const key = reviewWord.value ? wordKey(reviewWord.value) : ''
+  return currentReviewGroup.value ? currentReviewGroup.value.keys.indexOf(key) + 1 : 0
+})
+const completedReviewGroup = computed(() => {
+  if (reviewKind.value !== 'scheduled' || !completedReviewGroupId.value
+    || dismissedReviewGroups.value.includes(completedReviewGroupId.value)) return null
+  return reviewGroupPlan.value.find(group => group.id === completedReviewGroupId.value) || null
+})
+const discriminationDiff = computed(() => discriminationMembers.value.length >= 2
+  ? spellingDiff(String(discriminationMembers.value[0].term || ''), String(discriminationMembers.value[1].term || ''))
+  : null)
+function syncReviewGroupSource() {
+  if (reviewKind.value !== 'scheduled') return
+  const known = new Set(reviewGroupSource.value.map(reviewGroupKey))
+  const additions = scheduledWords.value.filter(word => !known.has(reviewGroupKey(word))).map(word => ({ ...word }))
+  if (additions.length) reviewGroupSource.value = [...reviewGroupSource.value, ...additions]
+}
+function resetReviewGroups() {
+  reviewGroupSource.value = []
+  ratedReviewKeys.value = []
+  dismissedReviewGroups.value = []
+  completedReviewGroupId.value = ''
+  discriminationToken += 1
+  discriminationOpen.value = false
+  discriminationLoading.value = false
+  discriminationMembers.value = []
+}
+function markReviewGroupRated(key: string) {
+  if (!ratedReviewKeys.value.includes(key)) ratedReviewKeys.value = [...ratedReviewKeys.value, key]
+  const group = reviewGroupPlan.value.find(item => item.keys.includes(key))
+  if (group && group.keys.every(member => ratedReviewKeys.value.includes(member))) {
+    completedReviewGroupId.value = group.id
+    dismissedReviewGroups.value = dismissedReviewGroups.value.filter(id => id !== group.id)
+  }
+  schedulePersistReviewSnapshot()
+}
+async function openReviewDiscrimination() {
+  const group = completedReviewGroup.value
+  if (!group) return
+  const token = ++discriminationToken
+  discriminationOpener = document.activeElement as HTMLElement
+  discriminationOpen.value = true
+  void nextTick(() => discriminationPanel.value?.focus())
+  discriminationLoading.value = true
+  discriminationMembers.value = []
+  try {
+    const members = await Promise.all(group.keys.map(async key => {
+      const source = reviewGroupSource.value.find(word => reviewGroupKey(word) === key) || { term: key }
+      if (!Number.isInteger(Number(source.id)) || Number(source.id) <= 0) return source
+      try { return { ...source, ...(await get(`/vocabulary/${source.id}`) as any) } }
+      catch { return source }
+    }))
+    if (token === discriminationToken) discriminationMembers.value = members
+  } finally {
+    if (token === discriminationToken) discriminationLoading.value = false
+  }
+}
+function closeReviewDiscrimination() {
+  void nextTick(() => discriminationOpener?.focus({ preventScroll: true }))
+  discriminationToken += 1
+  const id = completedReviewGroupId.value
+  if (id && !dismissedReviewGroups.value.includes(id)) dismissedReviewGroups.value = [...dismissedReviewGroups.value, id]
+  completedReviewGroupId.value = ''
+  discriminationOpen.value = false
+  discriminationLoading.value = false
+  discriminationMembers.value = []
+  schedulePersistReviewSnapshot()
+}
+watch(scheduledWords, () => { if (reviewKind.value === 'scheduled') syncReviewGroupSource() }, { flush: 'post' })
 function reviewDetailOf(word: any) {
   return word ? reviewDetails.value[String(word.id)] || null : null
 }
@@ -496,7 +598,7 @@ function translationRefreshStride() {
 }
 
 function startTranslationRefresh() {
-  if (translationRefreshTimer) return
+  if (reviewDisposed || translationRefreshTimer) return
   translationRefreshTick = 0
   translationRefreshTimer = window.setInterval(refreshTranslationStatuses, 5000)
 }
@@ -526,8 +628,8 @@ async function refreshTranslationStatuses() {
       || enrichment.value?.queued > 0 || enrichment.value?.inflight > 0
       || enrichment.value?.failed > 0 || enrichment.value?.error
       || enrichment.value?.waiting_configuration
-    translationProgress.value = hasTranslationActivity ? next : {}
-    if (!hasTranslationActivity && !hasEnrichmentActivity) {
+    translationProgress.value = hasTranslationActivity || hasEnrichmentActivity || next.scheduler?.reason === 'unknown' ? next : {}
+    if (!hasTranslationActivity && !hasEnrichmentActivity && next.scheduler?.reason !== 'unknown') {
       // 任务已经结束时清掉旧的顶部状态卡，避免“翻译进度”停留到下一次进入页面。
       translationProgress.value = {}
       if (enrichment.value && !enrichment.value.waiting_configuration && !enrichment.value.paused) {
@@ -713,11 +815,15 @@ async function removeEntry() {
   await load()
 }
 
-async function retryTranslation() {
-  const result: any = await post('/vocabulary/retry-pending')
-  showNotice('已将整个单词本中等待及失败的词条加入翻译队列')
-  await load()
-  startTranslationRefresh()
+async function retryTranslation(task: 'translation' | 'enrichment' = 'translation') {
+  if (!selected.value?.id) return
+  if (translationProgress.value.scheduler?.reason === 'unknown' && !await confirmDialog({title:'重试当前词',message:'上次请求结果未知，重试当前词可能重复产生费用。请先核查供应商记录。',confirmLabel:'仅重试当前词'})) return
+  try {
+    await post('/vocabulary/request-runs', {action:'retry',task,entry_ids:[selected.value.id],command_id:crypto.randomUUID()})
+    showNotice(task === 'translation' ? '已重试当前词翻译' : '已重试当前词补缺')
+    await load()
+    startTranslationRefresh()
+  } catch { error.value = '当前任务尚未结束或配置不可用，请核查任务状态后重试' }
 }
 
 async function rate(rating: string) {
@@ -730,6 +836,10 @@ async function rate(rating: string) {
   try {
     // Revision-aware storage rejects stale cards atomically. Older backends
     // still need the preflight refresh; Android must not reload every due word.
+    // A restored card can render before its in-flight queue head has finished.
+    // Settle that read before writing, so an older response cannot replace the
+    // queue during acknowledgement and keep the successfully rated card visible.
+    if (targetMode === 'scheduled' && dueRefreshPromise) await dueRefreshPromise
     if (targetMode === 'scheduled' && !initialTarget.review_revision) await refreshDueQueue()
     const target = reviewWord.value
     if (!target || reviewDisposed || !reviewMode.value || targetMode !== reviewKind.value
@@ -749,7 +859,7 @@ async function rate(rating: string) {
     }
     try {
       if (!reviewCommandId) reviewCommandId = newReviewCommandId()
-      const acknowledgement: any = await post(`/vocabulary/${target.id}/review`, { rating, mode: targetMode, expected_revision: target.review_revision, command_id: reviewCommandId })
+      const acknowledgement: any = await post(`/vocabulary/${target.id}/review`, { rating, mode: targetMode, response_projection: 'ack', expected_revision: target.review_revision, command_id: reviewCommandId })
       if (targetMode === 'scheduled') {
         const wasMastered = target.study_status === 'mastered'
         const isMastered = acknowledgement?.study_status === 'mastered'
@@ -788,6 +898,7 @@ async function rate(rating: string) {
     }
     if (reviewDisposed || !reviewMode.value || revision !== reviewRevision(reviewWord.value) || targetMode !== reviewKind.value) return
     if (targetMode === 'scheduled') {
+      markReviewGroupRated(completedKey)
       // Background pagination must not resurrect a successfully rated cache row.
       dueQueueWords.delete(completedKey)
       dueQueue = completeDueWord(dueQueue, completedKey)
@@ -820,10 +931,15 @@ async function rate(rating: string) {
       if (reviewDisposed || loadToken !== reviewLoadToken || !reviewMode.value || reviewKind.value !== 'scheduled') return
       }
     if (!reviewItems.value.length || reviewIndex.value >= reviewItems.value.length) {
-      reviewMode.value = false
-      reviewIndex.value = 0
-      showNotice(targetMode === 'scheduled' ? '今天的复习已完成，可继续额外巩固' : '本轮额外巩固已完成')
-      await load()
+      if (targetMode === 'scheduled' && completedReviewGroup.value) {
+        showNotice('本组两个词已完成，可查看辨析')
+      } else {
+        discriminationToken++; discriminationOpen.value = false
+        reviewMode.value = false
+        reviewIndex.value = 0
+        showNotice(targetMode === 'scheduled' ? '今天的复习已完成，可继续额外巩固' : '本轮额外巩固已完成')
+        await load()
+      }
     }
   } catch (cause) { error.value = String(cause) }
   finally {
@@ -836,6 +952,7 @@ async function rate(rating: string) {
 // 内容，点击反馈不再等待队列读取。
 async function beginReview(kind: 'scheduled' | 'reinforcement', loader: () => Promise<void>) {
   reviewKind.value = kind
+  resetReviewGroups()
   reveal.value = false
   reviewIndex.value = 0
   reviewDetailError.value = ''
@@ -861,6 +978,12 @@ async function beginReview(kind: 'scheduled' | 'reinforcement', loader: () => Pr
     reviewSnapshotRevision = String(cachedReview.revision || '')
     if (kind === 'scheduled') scheduledWords.value = cachedReview.items || []
     else reinforcementWords.value = cachedReview.items || []
+    if (kind === 'scheduled') {
+      reviewGroupSource.value = Array.isArray(cachedReview.groupSource) ? cachedReview.groupSource : []
+      ratedReviewKeys.value = Array.isArray(cachedReview.ratedGroupKeys) ? cachedReview.ratedGroupKeys.map(String) : []
+      dismissedReviewGroups.value = Array.isArray(cachedReview.dismissedGroups) ? cachedReview.dismissedGroups.map(String) : []
+      completedReviewGroupId.value = String(cachedReview.completedGroupId || '')
+    }
     reviewDetails.value = cachedReview.reviewDetails || {}
     reviewIndex.value = Math.max(0, Math.min(Number(cachedReview.reviewIndex || 0), Math.max(0, (kind === 'scheduled' ? scheduledWords.value : reinforcementWords.value).length - 1)))
     if (cachedReview.counts) applyCounts(cachedReview.counts)
@@ -894,6 +1017,10 @@ function persistReviewSnapshot() {
     reviewDetails: reviewDetails.value,
     counts: counts.value,
     dueQueue: reviewKind.value === 'scheduled' ? dueQueue : undefined,
+    groupSource: reviewKind.value === 'scheduled' ? reviewGroupSource.value : undefined,
+    ratedGroupKeys: reviewKind.value === 'scheduled' ? ratedReviewKeys.value : undefined,
+    dismissedGroups: reviewKind.value === 'scheduled' ? dismissedReviewGroups.value : undefined,
+    completedGroupId: reviewKind.value === 'scheduled' ? completedReviewGroupId.value : undefined,
   })
 }
 function schedulePersistReviewSnapshot() {
@@ -910,12 +1037,13 @@ async function startReview() {
 }
 
 function startDailyStudy() {
-  void router.push({ path: '/vocabulary/daily-study', query: { status: filter.value, search: search.value.trim(), ...(currentBankScope ? { scope: 'current' } : {}) } })
+  void router.push({ path: '/vocabulary/daily-study', query: { status: 'new', ...(currentBankScope ? { scope: 'current' } : {}) } })
 }
 
 async function closeReview() {
   if (reviewSaving.value) return
   persistReviewSnapshot()
+  discriminationToken++; discriminationOpen.value = false; discriminationMembers.value = []
   reviewMode.value = false
   reviewIndex.value = 0
   await load(selected.value?.id)
@@ -991,6 +1119,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   reviewDisposed = true
+  discriminationToken++
   document.removeEventListener('visibilitychange', refreshReviewOnForeground)
   window.removeEventListener('focus', refreshReviewOnForeground)
   window.removeEventListener('storage', refreshReviewOnForeground)
@@ -1059,6 +1188,7 @@ function filterCount(key: string) {
     <div v-if="notice" class="card vocab-notice">{{ notice }}</div>
     <div v-if="translationProgress.queued || translationProgress.translating || translationProgress.failed" class="card vocab-notice" role="status">翻译进度：排队 {{ translationProgress.queued || 0 }} · 正在翻译 {{ translationProgress.translating || 0 }} · 失败 {{ translationProgress.failed || 0 }}</div>
 
+    <VocabularyRequestNotice :progress="translationProgress" @changed="refreshTranslationStatuses" />
     <div class="vocab-stats-summary" role="group" aria-label="单词本统计摘要">
       <button
         v-for="chip in statChips"
@@ -1081,7 +1211,28 @@ function filterCount(key: string) {
     </section>
 
     <section v-if="reviewMode" class="review-overlay vocabulary-review-overlay">
-      <div v-if="reviewLoading" class="review-card vocabulary-review-card" data-review-fullscreen aria-busy="true">
+      <div v-if="discriminationOpen" class="review-discrimination-overlay" role="dialog" aria-modal="true" aria-label="形近词辨析" @click.self="closeReviewDiscrimination">
+        <section ref="discriminationPanel" class="review-discrimination-panel card" tabindex="-1" @keydown="discriminationKeys">
+          <header><strong>形近词辨析</strong><span>拼写与已知释义对照</span></header>
+          <p v-if="discriminationLoading" class="muted" role="status">正在读取两个词的释义…</p>
+          <template v-else>
+            <div class="review-discrimination-grid">
+              <article v-for="(member, index) in discriminationMembers" :key="index">
+                <h2><VocabularyTerm :term="member.term" /></h2>
+                <p class="tts-phonetic-line"><span v-if="member.phonetic">{{ member.phonetic }}</span><PronunciationButtons :text="member.term" :owner-id="'discrimination-' + index + '-' + (member.id || member.term)" /></p>
+                <p class="review-discrimination-meaning">{{ member.common_meaning || member.contextual_meaning || '暂无可用释义' }}</p>
+              </article>
+            </div>
+            <div v-if="discriminationDiff" class="review-spelling-diff" aria-label="拼写差异">
+              <div><small>{{ discriminationMembers[0]?.term }}</small><p><span v-for="(item, index) in discriminationDiff.left" :key="index" :class="{ changed: item.changed }">{{ item.char }}</span></p></div>
+              <div><small>{{ discriminationMembers[1]?.term }}</small><p><span v-for="(item, index) in discriminationDiff.right" :key="index" :class="{ changed: item.changed }">{{ item.char }}</span></p></div>
+            </div>
+          </template>
+          <footer><button class="button secondary" type="button" @click="closeReviewDiscrimination">返回复习</button></footer>
+        </section>
+      </div>
+
+      <div v-if="reviewLoading" :inert="discriminationOpen" class="review-card vocabulary-review-card" data-review-fullscreen aria-busy="true">
         <header class="review-header">
           <strong>{{ reviewKind === 'scheduled' ? '每日一背' : '额外巩固' }} <span>{{ String(reviewIndex + 1).padStart(2, '0') }} / --</span></strong>
           <button class="review-close" type="button" title="退出复习" aria-label="退出复习" :disabled="reviewSaving" @click="closeReview">退出复习</button>
@@ -1089,61 +1240,62 @@ function filterCount(key: string) {
         <div class="review-content">
           <div class="review-term">…</div>
           <div class="review-phonetic"></div>
-          <button class="button secondary reveal-button" type="button" disabled>显示释义和原句</button>
-        </div>
+          </div><footer class="review-controls"><button class="button secondary reveal-button" type="button" disabled>显示释义和原句</button></footer>
       </div>
-      <div v-else-if="reviewWord" class="review-card vocabulary-review-card" data-review-fullscreen>
+      <div v-else-if="reviewWord" :inert="discriminationOpen" class="review-card vocabulary-review-card" data-review-fullscreen>
         <header class="review-header">
           <!-- 进度分母：正式复习读整队到期计数（分页只带回队首，用已取到的行数当分母会从 12 一路跳到真实总数）；额外巩固读本轮选中的条数。 -->
           <strong>{{ reviewKind === 'scheduled' ? '每日一背' : '额外巩固' }} <span>{{ String(reviewIndex + 1).padStart(2, '0') }} / {{ String(reviewKind === 'scheduled' ? displayCount(counts.review) : reviewItems.length).padStart(2, '0') }}</span></strong>
           <button class="review-close" type="button" title="退出复习" aria-label="退出复习" :disabled="reviewSaving" @click="closeReview">退出复习</button>
         </header>
         <div class="review-content">
-          <div class="review-term"><span class="review-term-text">{{ reviewSnapshot.term }}</span></div>
-          <div class="review-phonetic">{{ reviewSnapshot.phonetic }}</div>
-          <button v-if="!reveal" :class="{ 'answer-reserved': reveal }" :inert="reveal" :aria-hidden="reveal" class="button secondary reveal-button" @click="reveal=true">显示释义和原句</button>
-          <div v-if="reveal" class="review-answer" :class="{ 'answer-reserved': !reveal }" :inert="!reveal" :aria-hidden="!reveal">
+          <div class="review-term"><VocabularyTerm :term="reviewSnapshot.term" :frequent="reviewSnapshot.is_frequent" /></div>
+<span v-if="currentReviewGroup" class="review-group-badge">形近词组 · {{ currentReviewGroupPosition }}/{{ currentReviewGroup.keys.length }}</span>
+<div v-if="completedReviewGroup" class="review-discrimination-entry"><button class="button secondary compact" type="button" :disabled="reviewSaving" @click="openReviewDiscrimination">查看辨析</button><span>本组两个词已完成本次作答</span></div>
+          <div class="review-phonetic tts-phonetic-line"><span v-if="reviewSnapshot.phonetic">{{ reviewSnapshot.phonetic }}</span><PronunciationButtons :text="reviewSnapshot.term" :owner-id="'review-' + reviewSnapshot.id" :disabled="reviewSaving" /></div>
+          <div class="review-answer" :class="{ 'answer-reserved': !reveal }" :inert="!reveal" :aria-hidden="!reveal">
             <p v-if="!reviewDetailOf(reviewWord)" class="muted" aria-live="polite">正在读取释义与原句…</p>
             <VocabularyMemoryContent v-else :entry="reviewSnapshot" :config="reviewDisplayConfig" />
             <p v-if="reviewDetailError" class="error" role="alert">{{ reviewDetailError }}<button class="button ghost compact" type="button" @click="loadReviewDetail(reviewWord, true)">重试</button></p>
           </div>
         </div>
-        <footer v-if="reveal" class="review-actions" :class="{ 'answer-reserved': !reveal }" :inert="!reveal" :aria-hidden="!reveal" :aria-busy="reviewSaving">
-          <button class="button secondary" :disabled="reviewSaving" @click="rate('hard')">不认识</button>
+        <footer class="review-controls"><button v-if="!reveal" class="button secondary reveal-button" @click="reveal=true">显示释义和原句</button><div class="review-actions" :class="{ 'answer-reserved': !reveal }" :inert="!reveal" :aria-hidden="!reveal" :aria-busy="reviewSaving">
+          <button class="button secondary" :disabled="reviewSaving" @click="rate('again')">不认识</button>
           <button class="button secondary" :disabled="reviewSaving" @click="rate('know')">认识</button>
           <button class="button" :disabled="reviewSaving" @click="rate('fluent')">熟练</button>
-        </footer>
+        </div></footer>
       </div>
-      <div v-else class="card empty vocab-review-empty">
+      <div v-else :inert="discriminationOpen" class="card empty vocab-review-empty">
         <p>今天没有待复习的单词。</p>
+<div v-if="completedReviewGroup" class="review-discrimination-entry"><button class="button secondary compact" type="button" :disabled="reviewSaving" @click="openReviewDiscrimination">查看辨析</button><span>本组两个词已完成本次作答</span></div>
         <button class="button secondary" type="button" :disabled="reviewSaving" @click="closeReview">退出复习</button>
       </div>
     </section>
 
     <div v-else class="vocabulary-layout">
       <div class="vocab-list-column">
-        <section class="vocab-list card">
+        <section ref="listScroller" class="vocab-list card">
           <template v-for="word in items" :key="word.id">
             <button class="vocab-list-item" :class="{active:selected?.id===word.id}" :aria-expanded="selected?.id===word.id" @click="select(word.id)">
-              <div class="vocab-list-head"><strong><Star v-if="word.is_frequent" class="vocab-star" :size="15" aria-label="高频词" />{{ word.lemma || word.term }}</strong><small>遇到 {{ word.encounter_count }} 次</small></div>
+              <div class="vocab-list-head"><strong><Star v-if="word.is_frequent" class="vocab-star" :size="15" aria-label="高频词" />{{ word.term }}</strong><small>遇到 {{ word.encounter_count }} 次</small></div>
               <p v-if="word.translation_status==='ready' || word.common_meaning || word.contextual_meaning">{{ word.common_meaning || word.contextual_meaning }}</p>
               <p v-else class="pending-text">{{ translationStatusText(word.translation_status) }}</p>
               <div class="vocab-list-meta"><span>{{ word.part_of_speech }}</span><span>{{ word.study_status === 'mastered' ? '已掌握' : '学习中' }}</span><ChevronDown class="vocab-expand-icon" :size="17" /></div>
             </button>
             <section v-if="selected?.id===word.id" class="portrait-vocab-detail" aria-label="单词详情">
               <div class="vocab-detail-head">
-                <div><span v-if="selected.is_frequent" class="eyebrow">高频词</span><h2><h2 class="vocab-term-text">{{ selected.lemma || selected.term }}</h2></h2><p>{{ selected.phonetic }}<span v-if="selected.part_of_speech">{{ selected.phonetic ? ' · ' : '' }}{{ selected.part_of_speech }}</span></p></div>
+                <div><span v-if="selected.is_frequent" class="eyebrow">高频词</span><h2 class="vocab-term-text">{{ selected.term }}</h2><p v-if="showsLemma(selected)" class="vocab-term-meta">原形 {{ selected.lemma }}</p><p class="tts-phonetic-line"><span v-if="selected.phonetic">{{ selected.phonetic }}</span><PronunciationButtons :text="selected.term" :owner-id="'vocab-' + selected.id" /><span v-if="selected.part_of_speech">{{ selected.phonetic ? ' · ' : '' }}{{ selected.part_of_speech }}</span></p></div>
                 <div class="vocab-tools"><button class="button ghost" @click="expandedAll=true; expansionToken++">展开已启用栏目</button><button class="button ghost" @click="editing=!editing">编辑</button><button class="button ghost danger-text" aria-label="删除单词" @click="removeEntry"><Trash2 :size="17" /></button></div>
               </div>
               <div v-if="!editing && selected.translation_status!=='ready'" class="vocab-pending-panel">
                 <RefreshCw :size="22" /><strong>{{ translationStatusText(selected.translation_status, true) }}</strong>
                 <p>单词和真题原句已经安全保存。</p>
-                <button v-if="selected.translation_status==='failed' || selected.translation_status==='pending'" class="button secondary" @click="retryTranslation">重试全部待翻译</button>
+                <button v-if="selected.translation_status==='failed' || selected.translation_status==='pending'" class="button secondary" @click="retryTranslation()">重试当前词翻译</button>
               </div>
               <template v-if="!editing && hasSelectedContent">
                 <VocabularyMemoryContent :entry="selected" :config="displayConfig" :expanded="expandedAll" :expansion-token="expansionToken" />
                 <p v-if="selected.enrichment_status === 'failed'" class="error vocab-enrich-error">补全失败：{{ selected.enrichment_error }}</p>
-                <button v-if="selected.enrichment_status === 'failed'" class="button secondary" @click="retryTranslation">重试失败任务</button>
+                <button v-if="selected.enrichment_status === 'failed'" class="button secondary" @click="retryTranslation('enrichment')">仅重试当前词补缺</button>
                 <div class="detail-actions"><button class="button secondary" @click="put(`/vocabulary/${selected.id}`,{manually_frequent:!selected.manually_frequent}).then(()=>load())"><Star :size="16" />{{ selected.manually_frequent ? '取消重点' : '标记重点' }}</button><button class="button" @click="put(`/vocabulary/${selected.id}`,{study_status:selected.study_status==='mastered'?'learning':'mastered'}).then(()=>load())"><Check :size="16" />{{ selected.study_status === 'mastered' ? '恢复学习' : '标记已掌握' }}</button></div>
               </template>
               <div v-else-if="editing" class="vocab-edit"><label>音标<input v-model="editForm.phonetic"></label><label>词性<input v-model="editForm.part_of_speech"></label><label>常用释义<textarea rows="3" v-model="editForm.common_meaning"></textarea></label><label>我的笔记<textarea rows="4" v-model="editForm.note"></textarea></label><div><button class="button" @click="saveEdit">保存修改</button><button class="button ghost" @click="editing=false">取消</button></div></div>
@@ -1160,18 +1312,18 @@ function filterCount(key: string) {
 
       <section class="vocab-detail desktop-vocab-detail card" v-if="selected">
         <div class="vocab-detail-head">
-          <div><span v-if="selected.is_frequent" class="eyebrow">高频词</span><h2><h2 class="vocab-term-text">{{ selected.lemma || selected.term }}</h2></h2><p>{{ selected.phonetic }}<span v-if="selected.part_of_speech">{{ selected.phonetic ? ' · ' : '' }}{{ selected.part_of_speech }}</span></p></div>
+          <div><span v-if="selected.is_frequent" class="eyebrow">高频词</span><h2 class="vocab-term-text">{{ selected.term }}</h2><p v-if="showsLemma(selected)" class="vocab-term-meta">原形 {{ selected.lemma }}</p><p class="tts-phonetic-line"><span v-if="selected.phonetic">{{ selected.phonetic }}</span><PronunciationButtons :text="selected.term" :owner-id="'vocab-' + selected.id" /><span v-if="selected.part_of_speech">{{ selected.phonetic ? ' · ' : '' }}{{ selected.part_of_speech }}</span></p></div>
           <div class="vocab-tools"><button class="button ghost" @click="editing=!editing">编辑</button><button class="button ghost danger-text" @click="removeEntry"><Trash2 :size="17" /></button></div>
         </div>
         <div v-if="!editing && selected.translation_status!=='ready'" class="vocab-pending-panel">
           <RefreshCw :size="22" /><strong>{{ translationStatusText(selected.translation_status, true) }}</strong>
           <p>单词和真题原句已经安全保存。</p>
-          <button v-if="selected.translation_status==='failed' || selected.translation_status==='pending'" class="button secondary" @click="retryTranslation">重试全部待翻译</button>
+          <button v-if="selected.translation_status==='failed' || selected.translation_status==='pending'" class="button secondary" @click="retryTranslation()">重试当前词翻译</button>
         </div>
         <template v-if="!editing && hasSelectedContent">
                 <VocabularyMemoryContent :entry="selected" :config="displayConfig" :expanded="expandedAll" :expansion-token="expansionToken" />
                 <p v-if="selected.enrichment_status === 'failed'" class="error vocab-enrich-error">补全失败：{{ selected.enrichment_error }}</p>
-                <button v-if="selected.enrichment_status === 'failed'" class="button secondary" @click="retryTranslation">重试失败任务</button>
+                <button v-if="selected.enrichment_status === 'failed'" class="button secondary" @click="retryTranslation('enrichment')">仅重试当前词补缺</button>
           <div class="detail-actions">
             <button class="button secondary" @click="put(`/vocabulary/${selected.id}`,{manually_frequent:!selected.manually_frequent}).then(()=>load())"><Star :size="16" />{{ selected.manually_frequent ? '取消重点' : '标记重点' }}</button>
             <button class="button" @click="put(`/vocabulary/${selected.id}`,{study_status:selected.study_status==='mastered'?'learning':'mastered'}).then(()=>load())"><Check :size="16" />{{ selected.study_status === 'mastered' ? '恢复学习' : '标记已掌握' }}</button>
@@ -1201,6 +1353,41 @@ function filterCount(key: string) {
 </template>
 
 <style scoped>
+.review-group-badge { display: inline-flex; margin-top: 10px; padding: 3px 10px; border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--line)); border-radius: 999px; background: var(--primary-soft); color: var(--primary); font-size: 12px; font-weight: 650; }
+.review-discrimination-entry { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 10px; margin-top: 12px; color: var(--muted); font-size: 13px; }
+.review-discrimination-overlay { position: fixed; inset: 0; z-index: 8; display: grid; place-items: center; padding: 20px; background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(6px); }
+.review-discrimination-panel { width: min(760px, calc(100vw - 32px)); max-height: min(680px, calc(100dvh - 40px)); overflow: auto; padding: 24px; text-align: left; }
+.review-discrimination-panel > header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.review-discrimination-panel > header strong { font-size: 20px; }
+.review-discrimination-panel > header span { color: var(--muted); font-size: 13px; }
+.review-discrimination-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
+.review-discrimination-grid article { min-width: 0; padding: 15px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.review-discrimination-grid h2 { margin: 0 0 6px; font: 650 28px/1.25 Cambria, Georgia, serif; overflow-wrap: anywhere; }
+.review-discrimination-grid .tts-phonetic-line { margin: 0; }
+.review-discrimination-meaning { margin: 12px 0 0; color: var(--ink); line-height: 1.7; overflow-wrap: anywhere; }
+.review-spelling-diff { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 14px; }
+.review-spelling-diff > div { padding: 12px 15px; border-radius: 12px; background: var(--primary-soft); }
+.review-spelling-diff small { color: var(--muted); }
+.review-spelling-diff p { margin: 6px 0 0; font: 650 28px/1.3 ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .04em; overflow-wrap: anywhere; }
+.review-spelling-diff .changed{color:var(--ink);text-decoration:underline;text-decoration-thickness:3px;text-decoration-color:#c77613;background:color-mix(in srgb,#f59e0b 18%,transparent);border-radius:4px}
+@media(max-width:600px){.review-discrimination-grid,.review-spelling-diff{grid-template-columns:1fr}.review-discrimination-panel{padding:16px}}
+
+.vocabulary-review-overlay{padding:16px;overflow:auto}
+.vocabulary-review-card{width:min(720px,100%);height:min(620px,calc(100dvh - 32px));min-height:0;padding:20px;display:flex;flex-direction:column;overflow:hidden}
+.vocabulary-review-card .review-header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex:none;min-height:36px}
+.vocabulary-review-card .review-close{position:static;flex:none}
+.vocabulary-review-card .review-content{flex:1;min-height:0;overflow-y:auto;padding:8px 0}
+.vocabulary-review-card .review-term{margin-top:4px;font-size:clamp(28px,4vw,44px);overflow-wrap:anywhere}
+.vocabulary-review-card .review-answer{margin-top:16px}
+.vocabulary-review-card .answer-reserved{visibility:hidden;pointer-events:none}
+.review-controls{display:grid;flex:none;min-width:0;padding-top:12px;border-top:1px solid var(--line)}
+.review-controls>*{grid-area:1 / 1;min-width:0}
+.review-controls .reveal-button{place-self:center;margin:0;z-index:1}
+.review-controls .review-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.vocab-term-meta{color:var(--muted);font-size:.875rem}
+@media(min-width:980px){.vocab-list{max-height:calc(var(--app-vh,100dvh) - 260px);min-height:180px;overflow-y:auto}}
+@media(max-height:500px){.vocabulary-review-card{padding:12px}.vocabulary-review-card .review-term{font-size:28px}.vocabulary-review-card .review-answer{margin-top:8px}.review-controls{padding-top:8px}}
+
 .vocab-reinforcement {
   position: relative;
   z-index: 3;

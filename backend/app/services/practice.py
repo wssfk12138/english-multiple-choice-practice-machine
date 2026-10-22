@@ -217,6 +217,27 @@ def create_session(
     if not unit_ids:
         raise LookupError("当前题库配置中没有已发布且包含题目的练习篇目")
 
+    if request.mode == "paper" and paper_id is not None:
+        if request.force_new:
+            connection.execute(
+                """
+                UPDATE practice_sessions SET status = 'abandoned'
+                WHERE paper_id = ? AND status = 'active' AND mode = 'paper'
+                """,
+                (paper_id,),
+            )
+        else:
+            existing = connection.execute(
+                """
+                SELECT id FROM practice_sessions
+                WHERE paper_id = ? AND status = 'active' AND mode = 'paper'
+                ORDER BY id DESC LIMIT 1
+                """,
+                (paper_id,),
+            ).fetchone()
+            if existing:
+                return {**get_session(connection, int(existing["id"])), "resumed": True}
+
     cursor = connection.execute(
         """
         INSERT INTO practice_sessions (mode, paper_id, unit_ids, shuffle_options, candidate_policy_version)

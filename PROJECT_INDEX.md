@@ -4,6 +4,7 @@
 
 | 问题 | 按需入口 |
 | --- | --- |
+| 2026-10-22 学习能力与桌面移植 | [当前实现与验证边界](docs/context/2026-10-22-desktop-port.md) |
 | 同步落地与授权 | [工作流](docs/workflow.md) |
 | 打包、清单与发行 | [发布流程](docs/release-windows.md) |
 | ESQ 与导入 | [格式](docs/question-bank-format.md)、[批量导入](docs/batch-import.md) |

@@ -10,12 +10,22 @@ import '../dashboard-glass.css'
 const router = useRouter()
 const data = ref<any>(null)
 const error = ref('')
-const tasksRevision = ref(0)
+const studyTodos = computed(() => {
+  if (!data.value) return null
+  const session = data.value.resume_session
+  return {
+    profile_id: Number(data.value.profile_id || 0),
+    resume_session: session ? { id: Number(session.id), mode: String(session.mode || ''), title: session.title } : null,
+    review_count: Number(data.value.review_count || 0),
+    frequent_count: Number(data.value.frequent_count || 0),
+  }
+})
 const vocabulary = ref<any[]>([])
 const tickerPaused = ref(false)
 const vocabularyPage = ref(0)
 const wordsPerPage = 4
 let vocabularyTimer: number | null = null
+let homeDisposed = false
 const vocabularyPages = computed(() => {
   const pages: any[][] = []
   for (let index = 0; index < vocabulary.value.length; index += wordsPerPage) {
@@ -30,7 +40,7 @@ const hasListening = computed(() =>
   Number(data.value?.paper_type_counts?.listening || 0) > 0,
 )
 const hasPracticeType = (type: string) =>
-  Number(data.value?.unit_type_counts?.[type] || 0) > 0
+  Number(type === 'listening' ? data.value?.paper_type_counts?.listening || 0 : data.value?.unit_type_counts?.[type] || 0) > 0
 const hasAnyPractice = computed(() =>
   ['cloze', 'reading', 'part_b', 'listening'].some(hasPracticeType),
 )
@@ -53,6 +63,7 @@ function advanceVocabulary() {
 }
 
 function startVocabularyRotation() {
+  if (homeDisposed) return
   if (vocabularyTimer !== null) window.clearInterval(vocabularyTimer)
   vocabularyTimer = window.setInterval(advanceVocabulary, 5000)
 }
@@ -61,43 +72,50 @@ function wait(milliseconds: number) {
   return new Promise(resolve => window.setTimeout(resolve, milliseconds))
 }
 
-async function loadHome() {
-  tasksRevision.value += 1
+let homeLoad: Promise<void> | null = null
+let homeReloadQueued = false
+
+function loadHome(): Promise<void> {
+  // 挂载与题库切换可能同时触发首页刷新：合并为一条在途请求，期间再次
+  // 请求只排队一次补跑，加载完成后循环退出。
+  homeReloadQueued = true
+  homeLoad ||= (async () => {
+    try {
+      while (homeReloadQueued) {
+        homeReloadQueued = false
+        await refreshHome()
+      }
+    } finally {
+      homeLoad = null
+    }
+  })()
+  return homeLoad
+}
+
+async function refreshHome() {
   error.value = ''
   const embedded = (window as any).__LINJIAN_STARTUP__
-  if (embedded) {
-    // The injected payload only accelerates the first paint. Profile changes
-    // must fetch fresh counts for the newly active question bank.
-    delete (window as any).__LINJIAN_STARTUP__
-    data.value = embedded
-    try {
-      const words: any = await get('/vocabulary/home?limit=20')
-      vocabulary.value = words.items || []
-    } catch {
-      vocabulary.value = []
-    }
-    return
+  // The injected payload only accelerates the first paint. Profile changes
+  // must fetch fresh counts for the newly active question bank.
+  if (embedded && !data.value) {
+    try { data.value = embedded } catch { data.value = null }
   }
+  if (embedded) delete (window as any).__LINJIAN_STARTUP__
+
   let dashboardResult: PromiseSettledResult<any> | null = null
   let wordsResult: PromiseSettledResult<any> | null = null
-
   for (let attempt = 0; attempt < 2; attempt++) {
     [dashboardResult, wordsResult] = await Promise.allSettled([
-      get('/startup'), get('/vocabulary/home?limit=20'),
+      embedded && !data.value ? Promise.resolve(embedded) : get('/startup'),
+      get('/vocabulary/home?limit=20'),
     ])
     if (dashboardResult.status === 'fulfilled') break
     if (attempt === 0) await wait(500)
   }
-
-  if (dashboardResult?.status === 'fulfilled') {
-    data.value = dashboardResult.value
-  } else {
-    error.value = '主页数据暂时没有加载成功，请刷新页面重试。'
-  }
-  if (wordsResult?.status === 'fulfilled') {
-    const words: any = wordsResult.value
-    vocabulary.value = words.items || []
-  }
+  if (dashboardResult?.status === 'fulfilled') data.value = dashboardResult.value
+  else error.value = '首页数据暂时没有加载成功，请刷新页面重试。'
+  if (wordsResult?.status === 'fulfilled') vocabulary.value = wordsResult.value.items || []
+  vocabularyPage.value = 0
 }
 
 onMounted(async () => {
@@ -105,6 +123,7 @@ onMounted(async () => {
   startVocabularyRotation()
 })
 onBeforeUnmount(() => {
+  homeDisposed = true
   if (vocabularyTimer !== null) window.clearInterval(vocabularyTimer)
 })
 
@@ -128,8 +147,8 @@ async function randomPractice(type: string) {
 
 <template>
   <div class="page glass-dashboard">
-    <div class="dashboard-bank-row"><QuestionBankSwitcher @changed="loadHome" /><RouterLink class="button ghost compact" to="/library"><BookOpen :size="17" />查看全部题库<ArrowRight :size="16" /></RouterLink></div>
-    <StudyTodos :key="tasksRevision" />
+    <div class="dashboard-bank-row"><QuestionBankSwitcher :show-library-link="true" @changed="loadHome" /></div>
+    <StudyTodos :tasks="studyTodos" :failed="!!error" @retry="loadHome" />
     <div v-if="error" class="warning">{{ error }}</div>
     <section v-if="vocabulary.length" class="vocabulary-ticker card" @mouseenter="tickerPaused=true" @mouseleave="tickerPaused=false">
       <div class="ticker-heading"><div><span class="eyebrow">VOCABULARY REVIEW</span><h3>词汇回顾</h3></div><RouterLink to="/vocabulary">查看单词本 →</RouterLink></div>
@@ -187,5 +206,6 @@ async function randomPractice(type: string) {
 
 
 <style scoped>
+
 .dashboard-bank-row{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}.dashboard-bank-row :deep(.bank-switcher){flex:1;min-width:0;margin:0}.dashboard-bank-row>.button{flex-shrink:0}.dashboard-bank-summary{display:flex;align-items:baseline;flex-wrap:wrap;gap:8px 20px;padding:14px 0;border-top:1px solid var(--line);color:var(--muted)}.dashboard-bank-summary h2{margin:0;font-size:.95rem;color:var(--ink)}.dashboard-bank-summary span{font-size:.88rem}.section-title h2{font-size:1.1rem;letter-spacing:0}
 </style>

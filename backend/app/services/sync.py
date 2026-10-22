@@ -846,6 +846,8 @@ def _serialize_row(
     payload: dict[str, Any] = {}
     columns = _table_columns(connection, table)
     for column in columns:
+        if column == "daily_study_identity":
+            continue
         if column == spec.get("secret") or column == "_sync_seq":
             continue
         value = row[column]
@@ -986,6 +988,8 @@ def _apply_row(
     update: dict[str, Any] = {}
     profile_name = str(payload.get("profile_name") or "")
     for column in columns:
+        if column == "daily_study_identity":
+            continue
         if column == "id" or column == spec.get("secret") or column.startswith("_sync_"):
             continue
         if column in spec["refs"]:
