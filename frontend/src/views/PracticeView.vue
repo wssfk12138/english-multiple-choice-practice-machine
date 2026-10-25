@@ -409,7 +409,8 @@ function resetPracticeScroll() {
 function pausePracticeTimer(reason: TimerPauseReason) {
   timerNow.value = performance.now()
   if (timerState.value) timerState.value = pauseTimerState(timerState.value, timerNow.value, reason)
-  listeningPlayer.value?.pause(reason === 'manual')
+  // 播放器可能因单元切换/卸载暂不可用；计时暂停不能中断退出导航。
+  try { listeningPlayer.value?.pause?.(reason === 'manual') } catch { /* 退出不因音频异常被阻断 */ }
   persistTimer()
 }
 function pausePracticeAutomatically() { pausePracticeTimer('automatic') }
