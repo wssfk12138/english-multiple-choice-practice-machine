@@ -29,9 +29,9 @@ def manifest_for(payload: bytes = b"abc") -> dict:
     return {
         "schemaVersion": 1,
         "windows": {
-            "versionName": "0.1.1",
-            "versionCode": 2,
-            "packageUrl": "https://github.com/wssfk12138/english-multiple-choice-practice-machine/releases/download/v0.1.1/app.exe",
+            "versionName": "1.0.1",
+            "versionCode": 3,
+            "packageUrl": "https://github.com/wssfk12138/english-multiple-choice-practice-machine/releases/download/v1.0.1/app.exe",
             "packageSize": len(payload),
             "packageSha256": hashlib.sha256(payload).hexdigest(),
             "packageType": "exe",
@@ -128,8 +128,8 @@ class UpdateSecurityTests(unittest.TestCase):
             receipt = {
                 "schemaVersion": 1,
                 "fileName": "app.exe",
-                "versionName": "0.1.1",
-                "versionCode": 2,
+                "versionName": "1.0.1",
+                "versionCode": 3,
                 "packageType": "exe",
                 "packageSize": len(payload),
                 "packageSha256": hashlib.sha256(payload).hexdigest(),
