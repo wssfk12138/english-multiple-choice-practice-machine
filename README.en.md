@@ -9,20 +9,32 @@
   A local Windows practice and review tool for English objective questions
 
   <p>
-    <a href="README.md">简体中文</a>
-    ·
-    <a href="docs/question-bank-format.md">Question-bank format</a>
-    ·
-    <a href="LICENSE">GPL-3.0-only</a>
+    <a href="README.md">简体中文</a> · <a href="docs/question-bank-format.md">Question-bank format</a> · <a href="LICENSE">GPL-3.0-only</a>
   </p>
 
   <p>
-    <img src="https://img.shields.io/badge/platform-Windows-2563EB?style=flat-square" alt="Windows">
+    <a href="https://linux.do/" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/LINUX-DO-FFB003.svg?logo=data:image/svg%2bxml;base64,DQo8c3ZnIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxMDAiPjxwYXRoIGQ9Ik00Ni44Mi0uMDU1aDYuMjVxMjMuOTY5IDIuMDYyIDM4IDIxLjQyNmM1LjI1OCA3LjY3NiA4LjIxNSAxNi4xNTYgOC44NzUgMjUuNDV2Ni4yNXEtMi4wNjQgMjMuOTY4LTIxLjQzIDM4LTExLjUxMiA3Ljg4NS0yNS40NDUgOC44NzRoLTYuMjVxLTIzLjk3LTIuMDY0LTM4LjAwNC0yMS40M1EuOTcxIDY3LjA1Ni0uMDU0IDUzLjE4di02LjQ3M0MxLjM2MiAzMC43ODEgOC41MDMgMTguMTQ4IDIxLjM3IDguODE3IDI5LjA0NyAzLjU2MiAzNy41MjcuNjA0IDQ2LjgyMS0uMDU2IiBzdHlsZT0ic3Ryb2tlOm5vbmU7ZmlsbC1ydWxlOmV2ZW5vZGQ7ZmlsbDojZWNlY2VjO2ZpbGwtb3BhY2l0eToxIi8+PHBhdGggZD0iTTQ3LjI2NiAyLjk1N3EyMi41My0uNjUgMzcuNzc3IDE1LjczOGE0OS43IDQ5LjcgMCAwIDEgNi44NjcgMTAuMTU3cS00MS45NjQuMjIyLTgzLjkzIDAgOS43NS0xOC42MTYgMzAuMDI0LTI0LjM4N2E2MSA2MSAwIDAgMSA5LjI2Mi0xLjUwOCIgc3R5bGU9InN0cm9rZTpub25lO2ZpbGwtcnVsZTpldmVub2RkO2ZpbGw6IzE5MTkxOTtmaWxsLW9wYWNpdHk6MSIvPjxwYXRoIGQ9Ik03Ljk4IDcwLjkyNmMyNy45NzctLjAzNSA1NS45NTQgMCA4My45My4xMTNRODMuNDI2IDg3LjQ3MyA2Ni4xMyA5NC4wODZxLTE4LjgxIDYuNTQ0LTM2LjgzMi0xLjg5OC0xNC4yMDMtNy4wOS0yMS4zMTctMjEuMjYyIiBzdHlsZT0ic3Ryb2tlOm5vbmU7ZmlsbC1ydWxlOmV2ZW5vZGQ7ZmlsbDojZjlhZjAwO2ZpbGwtb3BhY2l0eToxIi8+PC9zdmc+" alt="LINUX DO community"></a>
+    <img src="https://img.shields.io/badge/platform-Windows-2563EB?style=flat-square&logo=windows&logoColor=white" alt="Windows">
+    <img src="https://img.shields.io/badge/version-1.0.1-F59E0B?style=flat-square" alt="1.0.1">
     <img src="https://img.shields.io/badge/privacy-local--first-16A34A?style=flat-square" alt="Local first">
-    <img src="https://img.shields.io/badge/status-v0.1.0--alpha-F59E0B?style=flat-square" alt="v0.1.0-alpha">
     <img src="https://img.shields.io/badge/license-GPL--3.0--only-7C3AED?style=flat-square" alt="GPL-3.0-only">
   </p>
+  <p>
+    <a href="#sponsor"><img src="docs/assets/fastai-sponsor.svg" alt="FastAI model sponsor"></a>
+    <a href="#support"><img src="https://img.shields.io/badge/SUPPORT%20THIS%20PROJECT-WECHAT-07C160.svg?logo=wechat&logoColor=white" alt="Support this project via WeChat"></a>
+  </p>
 </div>
+
+## Download 1.0.1
+
+| Platform | Version | Get it |
+| --- | --- | --- |
+| Windows 10 / 11 | 1.0.1 | [Installer](https://github.com/wssfk12138/english-multiple-choice-practice-machine/releases/download/v1.0.1/EnglishPracticeMachinePublic-1.0.1-Setup.exe) · [Portable ZIP](https://github.com/wssfk12138/english-multiple-choice-practice-machine/releases/download/v1.0.1/english-practice-machine-windows.zip) |
+| Android phone / tablet | 1.0.1 | [APK](https://github.com/wssfk12138/android-english-multiple-choice-practice-machine/releases/download/v1.0.1/english-practice-machine-android-1.0.1.apk) · [Android README](https://github.com/wssfk12138/android-english-multiple-choice-practice-machine) |
+
+> **Fixed in 1.0.1:** leaving an unanswered listening unit while the timer was active could keep the practice page open after confirming “continue exiting”. It now returns to the bank on both Windows and Android.
+
+Updating in place keeps local banks, practice history, and model profiles. The in-app updater verifies size and SHA-256 before starting the installer.
 
 ![English Practice Machine home screen](docs/images/homepage-public.png)
 
@@ -56,7 +68,7 @@ Random practice selects complete units, options can be shuffled before each atte
 
 > Even with a limited set of questions, every new attempt should require reading, reasoning, and answering again—not simply recalling the correct option.
 
-The project is currently `v0.1.0-alpha / active development`. The main practice, wrong-answer, vocabulary, AI-assistant, model-assisted import, and ESQ sharing workflows are available. Portable releases, public CI, and additional exam templates are still being developed.
+The project currently ships `1.0.1`. The main practice, wrong-answer, vocabulary, AI-assistant, model-assisted import, LAN sync, and ESQ sharing workflows are available. Public CI and additional exam templates are still being developed.
 
 ## Feature overview
 
@@ -428,11 +440,11 @@ Core workflows already available:
 - Postgraduate English II, CET objective formats, and ESQ 1.1 sharing
 - GPL-3.0-only code license and author metadata
 
-Before the first public release, the maintainer should:
+Remaining improvements:
 
 - Add GitHub Actions CI with recurring secret and privacy-file scans.
 - Add `CONTRIBUTING.md`, `SECURITY.md`, and issue/PR templates.
-- Publish a Windows `v0.1.0-alpha` portable build.
+- Add more exam templates and public bank catalogs.
 
 ## Contributing question banks and code
 
@@ -444,6 +456,20 @@ Code, parser fixes, UI improvements, and legally shareable ESQ packages are welc
 - Whether redistribution is allowed
 
 Code contributions follow GPL-3.0-only. Question-bank content does not automatically inherit the code license; use the `license` and `source` declarations in each ESQ `manifest.json`.
+
+<a id="sponsor"></a>
+<h2><img src="docs/assets/fastai-icon.png" alt="FastAI icon" height="40" valign="middle"> FastAI model sponsor<br><sub><sup>Free access does not mean development is free. Thanks to FastAI for keeping the features open to every user.</sup></sub></h2>
+
+If you are looking for a stable, affordable AI model relay, try [FastAI](https://www.fastaitoken.com/register?aff=BF9KNKFHX725&promo=WSSFK). It offers flagship models from DeepSeek, GLM, Kimi, GPT, Claude, Grok, and others, plus image and video generation models. Its domestic-model groups run on large-provider self-hosted deployments with low latency and high cache hit rates, and new accounts receive $3 in trial credit. The [relay beginner guide](https://github.com/wssfk12138/fastaitoken-beginner-guide) explains groups, multipliers, billing, and usage.
+
+This project uses models provided by FastAI during development. Registering or topping up through the link below earns the author a referral credit that supports continued maintenance. <a href="https://www.fastaitoken.com/register?aff=BF9KNKFHX725&amp;promo=WSSFK"><img src="docs/assets/fastai-register.svg" alt="FastAI sign up" height="18"></a>
+
+<a id="support"></a>
+<h2>Support this project<br><sub><sup>If it saved you some time organising question banks, you can buy the author a coffee.</sup></sub></h2>
+
+<p align="center">
+  <img src="docs/assets/wechat-sponsor.png" alt="WeChat sponsor QR code" width="360">
+</p>
 
 ## Author and license
 

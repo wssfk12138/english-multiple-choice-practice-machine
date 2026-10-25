@@ -9,22 +9,32 @@
   面向英语客观题学习者的 Windows 本地刷题与复习工具
 
   <p>
-    <a href="README.en.md">English</a>
-    ·
-    <a href="docs/question-bank-format.md">题库格式</a>
-    ·
-    <a href="LICENSE">GPL-3.0-only</a>
+    <a href="README.en.md">English</a> · <a href="docs/question-bank-format.md">题库格式</a> · <a href="LICENSE">GPL-3.0-only</a>
   </p>
 
   <p>
-    <img src="https://img.shields.io/badge/platform-Windows-2563EB?style=flat-square" alt="Windows">
+    <a href="https://linux.do/" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/LINUX-DO-FFB003.svg?logo=data:image/svg%2bxml;base64,DQo8c3ZnIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxMDAiPjxwYXRoIGQ9Ik00Ni44Mi0uMDU1aDYuMjVxMjMuOTY5IDIuMDYyIDM4IDIxLjQyNmM1LjI1OCA3LjY3NiA4LjIxNSAxNi4xNTYgOC44NzUgMjUuNDV2Ni4yNXEtMi4wNjQgMjMuOTY4LTIxLjQzIDM4LTExLjUxMiA3Ljg4NS0yNS40NDUgOC44NzRoLTYuMjVxLTIzLjk3LTIuMDY0LTM4LjAwNC0yMS40M1EuOTcxIDY3LjA1Ni0uMDU0IDUzLjE4di02LjQ3M0MxLjM2MiAzMC43ODEgOC41MDMgMTguMTQ4IDIxLjM3IDguODE3IDI5LjA0NyAzLjU2MiAzNy41MjcuNjA0IDQ2LjgyMS0uMDU2IiBzdHlsZT0ic3Ryb2tlOm5vbmU7ZmlsbC1ydWxlOmV2ZW5vZGQ7ZmlsbDojZWNlY2VjO2ZpbGwtb3BhY2l0eToxIi8+PHBhdGggZD0iTTQ3LjI2NiAyLjk1N3EyMi41My0uNjUgMzcuNzc3IDE1LjczOGE0OS43IDQ5LjcgMCAwIDEgNi44NjcgMTAuMTU3cS00MS45NjQuMjIyLTgzLjkzIDAgOS43NS0xOC42MTYgMzAuMDI0LTI0LjM4N2E2MSA2MSAwIDAgMSA5LjI2Mi0xLjUwOCIgc3R5bGU9InN0cm9rZTpub25lO2ZpbGwtcnVsZTpldmVub2RkO2ZpbGw6IzE5MTkxOTtmaWxsLW9wYWNpdHk6MSIvPjxwYXRoIGQ9Ik03Ljk4IDcwLjkyNmMyNy45NzctLjAzNSA1NS45NTQgMCA4My45My4xMTNRODMuNDI2IDg3LjQ3MyA2Ni4xMyA5NC4wODZxLTE4LjgxIDYuNTQ0LTM2LjgzMi0xLjg5OC0xNC4yMDMtNy4wOS0yMS4zMTctMjEuMjYyIiBzdHlsZT0ic3Ryb2tlOm5vbmU7ZmlsbC1ydWxlOmV2ZW5vZGQ7ZmlsbDojZjlhZjAwO2ZpbGwtb3BhY2l0eToxIi8+PC9zdmc+" alt="LINUX DO 社区"></a>
+    <img src="https://img.shields.io/badge/platform-Windows-2563EB?style=flat-square&logo=windows&logoColor=white" alt="Windows">
+    <img src="https://img.shields.io/badge/version-1.0.1-F59E0B?style=flat-square" alt="1.0.1">
     <img src="https://img.shields.io/badge/privacy-local--first-16A34A?style=flat-square" alt="Local first">
-    <img src="https://img.shields.io/badge/status-v0.1.0--alpha-F59E0B?style=flat-square" alt="v0.1.0-alpha">
     <img src="https://img.shields.io/badge/license-GPL--3.0--only-7C3AED?style=flat-square" alt="GPL-3.0-only">
+  </p>
+  <p>
+    <a href="#sponsor"><img src="docs/assets/fastai-sponsor.svg" alt="FastAI 模型赞助商"></a>
+    <a href="#support"><img src="https://img.shields.io/badge/%E8%B5%9E%E5%8A%A9%E6%9C%AC%E9%A1%B9%E7%9B%AE-%E5%BE%AE%E4%BF%A1-07C160.svg?logo=wechat&logoColor=white" alt="微信赞助本项目"></a>
   </p>
 </div>
 
-> 如果你正在寻找稳定、实惠的 AI 模型中转服务，可以试试 [FastAiToken](https://www.fastaitoken.com/register?aff=BF9KNKFHX725)，也可以先阅读[中转站新手帮助文档](https://github.com/wssfk12138/fastaitoken-beginner-guide)了解中转站、倍率、计费和使用方式。你在 FastAiToken 中的每一笔消费都会让作者获得一定数量的返利，我会把它转化为 Token，继续开发更多新项目并上传至 GitHub。当前所有项目均使用了 FastAiToken 提供的 5.6 Sol 模型参与开发。**注册后点击右上角用户头像前往QQ客服群@群主可领3刀试用金（需提供用户id，暗号：GitHub来的）。** <a href="https://www.fastaitoken.com/register?aff=BF9KNKFHX725" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/FastAI-%E7%82%B9%E5%87%BB%E6%B3%A8%E5%86%8C-4F7CFF.svg?logo=data%3Aimage%2Fpng%3Bbase64%2CiVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAACXBIWXMAABYlAAAWJQFJUiTwAAABmUlEQVRYw%2B2Vv0tbURTHP%2BfmvcS8lx%2BYKrZ16modFbQiKrgWuujQpZtgqV3s0rGT4N9Q6NJBM0nWUoe6uSj4BxQKUnBSSPISk3tPB1%2BhS42JFqHcD1wuXM79fs89HM4Fj8fjuWdk4Jubl9PEUiEC4nSV0r0cQATkgBIHjEvzbzLBIN7mrd11JVkBoJgeZgSMghGw%2Bjv0kHEzc61W3%2B7r3Zcuk5oDNP8oogKamlvp0O6u95LrrwKvtYDRbQRoiSWrX7DawoniABVQFVTbtOwn5rJHd5uA7c6SMd8QA44aH8zO%2FTThG30sea1qzCMKQCFtwBJIkZ8ayxJT0rmJ1EBNSKAf1fCMDCAComn5QRP7noWgc2OpnhFrGrKM45in1NsJJtxgSBYIFIQGqidYFIslcXs8D6p9vaVnxESjwlk8ghAR5baARbKaJycK3Re8C7%2FepgeuT6CaPMENhZzbScZkngszSaB5ALLuM5u3M%2B89B1bz36%2FMkn0i84BRflDGMkyN0Gz8%2B1FcrT%2Fkst3EVoq8klP%2Fc3k8Hs9%2FyS8IrHi9DaVvuAAAAABJRU5ErkJggg%3D%3D" alt="fastai 点击注册"></a>
+## 下载 1.0.1
+
+| 平台 | 版本 | 获取方式 |
+| --- | --- | --- |
+| Windows 10 / 11 | 1.0.1 | [安装包](https://github.com/wssfk12138/english-multiple-choice-practice-machine/releases/download/v1.0.1/EnglishPracticeMachinePublic-1.0.1-Setup.exe) · [免安装 ZIP](https://github.com/wssfk12138/english-multiple-choice-practice-machine/releases/download/v1.0.1/english-practice-machine-windows.zip) |
+| Android 手机 / 平板 | 1.0.1 | [下载 APK](https://github.com/wssfk12138/android-english-multiple-choice-practice-machine/releases/download/v1.0.1/english-practice-machine-android-1.0.1.apk) · [Android README](https://github.com/wssfk12138/android-english-multiple-choice-practice-machine) |
+
+> **1.0.1 修复**：在计时模式、听力单元且尚未作答时退出练习，确认“继续退出”后页面会停留在原处、无法离开。现在可以正常返回题库，Windows 与 Android 两端均已修复。
+
+覆盖安装会保留本地题库、练习记录和模型配置。应用内检查更新会先核对文件大小与 SHA-256，再启动安装程序。
 
 ![英语刷题机主界面](docs/images/homepage-public.png)
 
@@ -62,7 +72,7 @@
 
 > 我们希望即使题目数量有限，每一次重新练习仍然需要理解文章、判断逻辑和重新作答，而不是把反复刷题变成机械地背答案。
 
-项目当前处于 `v0.1.0-alpha / 持续开发阶段`。核心刷题、错题本、单词本、AI 助手、模型辅助导入和 ESQ 题库分享链路已经可以使用；便携发布包、公开 CI 和更多考试模板仍在完善中。
+项目当前发布 `1.0.1`。核心刷题、错题本、单词本、AI 助手、模型辅助导入、局域网同步和 ESQ 题库分享链路已经可以使用；公开 CI 和更多考试模板仍在完善中。
 
 ## 功能概览
 
@@ -438,11 +448,11 @@ corepack pnpm run build
 - 英语二、四六级客观题模板和 ESQ 1.1 分享格式
 - GPL-3.0-only 代码许可证与作者信息
 
-开源发布前仍建议完成：
+后续仍建议完成：
 
 - 加入 GitHub Actions CI，并持续执行密钥和隐私文件扫描。
 - 增加 `CONTRIBUTING.md`、`SECURITY.md`、Issue/PR 模板。
-- 制作 Windows `v0.1.0-alpha` 便携版。
+- 补充更多考试模板与公开题库目录。
 
 ## 贡献题库与代码
 
@@ -454,6 +464,20 @@ corepack pnpm run build
 - 是否允许再分发
 
 代码贡献遵循 GPL-3.0-only。题库内容不自动继承代码许可证，必须以 ESQ `manifest.json` 的 `license` 和 `source` 声明为准。
+
+<a id="sponsor"></a>
+<h2><img src="docs/assets/fastai-icon.png" alt="FastAI 图标" height="40" valign="middle"> FastAI 模型赞助商<br><sub><sup>免费不意味着开发没有成本。感谢 FastAI 的赞助，让功能对所有用户开放。</sup></sub></h2>
+
+如果你正在寻找稳定、实惠的 AI 模型中转服务，可以试试 [FastAI](https://www.fastaitoken.com/register?aff=BF9KNKFHX725&promo=WSSFK)。它提供 DeepSeek、GLM、Kimi、GPT、Claude、Grok 等模型厂商的旗舰模型，也提供图片和视频生成模型；国模分组采用大厂自部署模型，低延迟、高缓存，注册即送 3$ 体验金。也可以先阅读[中转站新手帮助文档](https://github.com/wssfk12138/fastaitoken-beginner-guide)了解中转站、倍率、计费和使用方式。
+
+本项目使用 FastAI 提供的模型参与开发。通过下方链接注册或充值，作者会获得返利，用于继续维护项目。 <a href="https://www.fastaitoken.com/register?aff=BF9KNKFHX725&amp;promo=WSSFK"><img src="docs/assets/fastai-register.svg" alt="FastAI 点击注册" height="18"></a>
+
+<a id="support"></a>
+<h2>赞助本项目<br><sub><sup>如果它帮你省下了一点整理题库的时间，欢迎请作者喝杯咖啡。</sup></sub></h2>
+
+<p align="center">
+  <img src="docs/assets/wechat-sponsor.png" alt="微信赞赏码" width="360">
+</p>
 
 ## 作者与许可证
 
