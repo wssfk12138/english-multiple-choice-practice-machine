@@ -109,12 +109,12 @@ def authenticate_device(
     pairing_token: str,
     profile_names: Iterable[str],
     device_id: str = "",
-    *, transport: str = "legacy", pairing_code: str = "",
+    *, transport: str = "legacy", pairing_code: str = "", device_model: str = "",
 ) -> tuple[str, str | None] | None:
     # Pairing and revocation must not interleave before the session is registered.
     with _tokens_lock:
         return _authenticate_device(connection, passcode, pairing_token, profile_names, device_id,
-                                    transport=transport, pairing_code=pairing_code)
+                                    transport=transport, pairing_code=pairing_code, device_model=device_model)
 
 
 def _authenticate_device(
@@ -123,7 +123,7 @@ def _authenticate_device(
     pairing_token: str,
     profile_names: Iterable[str],
     device_id: str = "",
-    *, transport: str = "legacy", pairing_code: str = "",
+    *, transport: str = "legacy", pairing_code: str = "", device_model: str = "",
 ) -> tuple[str, str | None] | None:
     """Authenticate a device and issue a short-lived sync session.
 
@@ -168,10 +168,10 @@ def _authenticate_device(
     if device_id:
         try:
             if authenticated_by_pairing:
-                _record_pairing(connection, device_id, None)
+                _record_pairing(connection, device_id, None, device_model)
             else:
                 issued_pairing_token = secrets.token_urlsafe(32)
-                _record_pairing(connection, device_id, issued_pairing_token)
+                _record_pairing(connection, device_id, issued_pairing_token, device_model)
                 connection.execute("UPDATE sync_paired_devices SET transport = ? WHERE device_id = ?",
                                    (transport, device_id))
             if replacement:
@@ -210,6 +210,8 @@ def _ensure_paired_devices_table(connection: sqlite3.Connection) -> None:
     from ..database import _ensure_column
     _ensure_column(connection, "sync_paired_devices", "pairing_token_hash", "TEXT")
     _ensure_column(connection, "sync_paired_devices", "transport", "TEXT NOT NULL DEFAULT 'legacy'")
+    _ensure_column(connection, "sync_paired_devices", "display_name", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(connection, "sync_paired_devices", "device_model", "TEXT NOT NULL DEFAULT ''")
     _ensure_sync_aliases_table(connection)
 
 
@@ -227,15 +229,15 @@ def _ensure_sync_aliases_table(connection: sqlite3.Connection) -> None:
     )
 
 
-def _record_pairing(connection: sqlite3.Connection, device_id: str, pairing_token: str | None) -> None:
+def _record_pairing(connection: sqlite3.Connection, device_id: str, pairing_token: str | None, device_model: str = "") -> None:
     _ensure_paired_devices_table(connection)
     token_hash = _pairing_hash(pairing_token) if pairing_token else None
     connection.execute(
         """
-        INSERT INTO sync_paired_devices(device_id, pairing_token_hash) VALUES (?, ?)
+        INSERT INTO sync_paired_devices(device_id, pairing_token_hash, device_model) VALUES (?, ?, ?)
         ON CONFLICT(device_id) DO UPDATE SET last_seen_at = CURRENT_TIMESTAMP, pairing_token_hash = COALESCE(excluded.pairing_token_hash, sync_paired_devices.pairing_token_hash)
         """,
-        (device_id, token_hash),
+        (device_id, token_hash, device_model),
     )
 
 
@@ -288,7 +290,7 @@ def paired_devices(connection: sqlite3.Connection, limit: int, offset: int) -> d
     _ensure_paired_devices_table(connection)
     total = connection.execute("SELECT COUNT(*) FROM sync_paired_devices").fetchone()[0]
     items = connection.execute(
-        "SELECT device_id, paired_at, last_seen_at FROM sync_paired_devices "
+        "SELECT device_id, paired_at, last_seen_at, display_name, device_model FROM sync_paired_devices "
         "ORDER BY paired_at DESC, device_id LIMIT ? OFFSET ?", (limit, offset),
     ).fetchall()
     return {"items": [dict(item) for item in items], "total": total}

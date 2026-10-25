@@ -54,7 +54,7 @@ class SyncDeviceTests(unittest.TestCase):
         listing = self.client.get('/lan-sync/devices?limit=1&offset=1').json()
         self.assertEqual(listing['total'], 2)
         self.assertEqual(len(listing['items']), 1)
-        self.assertEqual(set(listing['items'][0]), {'device_id', 'paired_at', 'last_seen_at'})
+        self.assertEqual(set(listing['items'][0]), {'device_id', 'paired_at', 'last_seen_at', 'display_name', 'device_model'})
         self.assertEqual(self.client.delete('/lan-sync/devices/android-a').json(), {'revoked': 1})
         self.assertFalse(sync.verify_token(first))
         self.assertIsNone(sync.session_profiles(first))

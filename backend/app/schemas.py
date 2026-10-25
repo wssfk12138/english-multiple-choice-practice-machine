@@ -243,6 +243,7 @@ class LanSyncHandshake(BaseModel):
     passcode: str = Field(default="", max_length=64)
     pairing_token: str = Field(default="", max_length=256)
     device_id: str = Field(default="", max_length=128)
+    device_model: str = Field(default="", max_length=80, pattern=r"^[^\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]*$")
     profile_names: list[str] = Field(default_factory=list, max_length=200)
 
 

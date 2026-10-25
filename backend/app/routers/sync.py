@@ -218,6 +218,24 @@ def devices(
     return sync_service.paired_devices(connection, limit, offset)
 
 
+class DeviceName(BaseModel):
+    display_name: str = Field(max_length=80, pattern=r"^[^\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]*$")
+
+
+@router.put("/devices/{device_id}/name")
+def rename_device(payload: DeviceName, device_id: str = Path(min_length=1, max_length=128),
+                  connection: sqlite3.Connection = Depends(get_db)) -> dict:
+    # Host-local management only; LAN clients cannot rename other devices.
+    with sync_service._tokens_lock:
+        sync_service._ensure_paired_devices_table(connection)
+        cursor = connection.execute("UPDATE sync_paired_devices SET display_name = ? WHERE device_id = ?",
+                                    (payload.display_name.strip(), device_id))
+        if not cursor.rowcount:
+            raise HTTPException(404, "设备已解除配对，请刷新列表")
+        connection.commit()
+    return {"display_name": payload.display_name.strip()}
+
+
 @router.delete("/devices/{device_id}")
 def revoke_device(
     device_id: str = Path(min_length=1, max_length=128),
@@ -257,7 +275,7 @@ def handshake(
         raise HTTPException(401, "安全配对只允许 HTTPS")
     result = sync_service.authenticate_device(
         connection, payload.passcode, payload.pairing_token, payload.profile_names, payload.device_id,
-        transport=transport, pairing_code=payload.pairing_code,
+        transport=transport, pairing_code=payload.pairing_code, device_model=payload.device_model.strip(),
     )
     if not result:
         raise HTTPException(401, "同步口令不正确")
