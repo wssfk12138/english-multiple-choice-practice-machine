@@ -19,7 +19,7 @@ import {
   Sparkles,
   Trash2,
 } from 'lucide-vue-next'
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, onActivated, onDeactivated, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, del, get, patch, post, put } from '../api'
 import { confirmDialog, promptDialog } from '../platform/dialogs'
@@ -133,6 +133,10 @@ const labelPromptModel = ref('')
 const labelPromptHasModel = ref(false)
 const labelPromptBusy = ref(false)
 const labelPromptError = ref('')
+const importPageActive = ref(true)
+let importActivatedOnce = false
+let deferredLabelScope: LabelScope | null = null
+onDeactivated(() => { importPageActive.value = false })
 const labelLaterButton = ref<HTMLButtonElement | null>(null)
 const targetProfileId = ref(0)
 const esqDestinationName = computed(() => questionBankProfilesState.items.find(profile => Number(profile.id) === Number(esqCurrent.value?.profile_id))?.name || '未识别题库')
@@ -253,6 +257,7 @@ function setImportLabelScope(scope: LabelScope) {
 }
 
 async function prepareLabelPrompt(scope: LabelScope) {
+  if (!importPageActive.value) { deferredLabelScope = scope; return }
   if (questionLabelingState.isRunning || questionLabelingState.isPausing) {
     notice.value = `“${questionLabelingState.scope?.title || '当前题库'}”正在智能标注，请等待完成或暂停后再启动其他范围。`
     return
@@ -397,6 +402,28 @@ onMounted(async () => {
     error.value = String(cause)
   }
 })
+
+onActivated(async () => {
+  importPageActive.value = true
+  if (!importActivatedOnce) { importActivatedOnce = true; return }
+  if (deferredLabelScope) {
+    const scope = deferredLabelScope; deferredLabelScope = null
+    void prepareLabelPrompt(scope)
+  }
+  if (busy.value) return
+  try {
+    if (targetProfileId.value !== questionBankProfilesState.activeId) { await handleProfileChanged(); return }
+    await Promise.all([loadJobs(), loadEsqJobs(), loadStagedEsqTasks()])
+    const requested = Number(route.query.esqImportId)
+    if (Number.isInteger(requested) && requested > 0) await openEsqJob(requested)
+  } catch (cause) { error.value = String(cause) }
+})
+function protectRunningImport(event: BeforeUnloadEvent) {
+  if (!busy.value) return
+  event.preventDefault(); event.returnValue = ''
+}
+onMounted(() => window.addEventListener('beforeunload', protectRunningImport))
+onUnmounted(() => window.removeEventListener('beforeunload', protectRunningImport))
 
 async function handleProfileChanged() {
   labelManagerOpen.value = false
@@ -874,7 +901,7 @@ async function exportEsq(includeLabels = false) {
       </div>
     </div>
     <fieldset class="import-switcher" :disabled="busy"><QuestionBankSwitcher @changed="handleProfileChanged" /></fieldset>
-    <div v-if="publishStage" class="import-publish-progress card" role="status" aria-live="polite"><RefreshCw :size="17" /><span>{{ publishStage }} · {{ publishSeconds }} 秒，请保持本页开启。</span></div>
+    <div v-if="publishStage" class="import-publish-progress card" role="status" aria-live="polite"><RefreshCw :size="17" /><span>{{ publishStage }} · {{ publishSeconds }} 秒，可切换页面，后台继续处理。</span></div>
     <div v-if="error" class="warning" role="alert">{{ error }}</div><div v-if="notice" class="card" style="margin-bottom:16px;color:var(--success)">{{ notice }}</div>
 
     <section v-if="section === 'home'" class="import-home">
@@ -918,7 +945,7 @@ async function exportEsq(includeLabels = false) {
           <details :open="!esqCurrent" class="document-upload-details"><summary><span class="source-heading"><FileArchive :size="22" /><h2>ESQ 分享题库</h2></span></summary><div class="document-upload-fields">
           <label class="field"><span>导入 ESQ 共享题库</span><input type="file" accept=".esq,.zip" @change="selectedEsqFile=($event.target as HTMLInputElement).files?.[0] || null"></label>
           <button class="button secondary" style="width:100%" :disabled="!selectedEsqFile || busy" @click="uploadEsq"><FileArchive :size="16" />{{ busy ? '正在校验…' : '上传 ESQ 题库包' }}</button>
-          <div class="lead" style="font-size:12px;margin-top:10px">题库包会先进入预览，不会自动覆盖本地题库。</div>
+          <div class="lead" style="font-size:0.75rem;margin-top:10px">题库包会先进入预览，不会自动覆盖本地题库。</div>
 <div v-if="stagedEsqTasks.length" class="staged-tasks">
 <div v-for="task in stagedEsqTasks" :key="task.stage_id" class="staged-task-row">
 <span><b>{{ task.filename }}</b><small>{{ stagedTaskSize(task.archive_bytes) }} · {{ stagedTaskPhase(task) }}</small></span>
@@ -930,7 +957,7 @@ async function exportEsq(includeLabels = false) {
     <section v-if="section === 'home' || section === 'esq'" class="import-export">
         <div class="card">
           <div class="source-heading"><Download :size="18" /><h3>题库包导出</h3></div>
-          <p class="lead" style="font-size:12px;margin:10px 0 14px">默认导出全部正式题库和标准答案，不包含做题记录、单词本和 API 配置。</p>
+          <p class="lead" style="font-size:0.75rem;margin:10px 0 14px">默认导出全部正式题库和标准答案，不包含做题记录、单词本和 API 配置。</p>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button class="button secondary import-export-action" :disabled="busy" @click="exportEsq(false)"><Download :size="20" />导出题库</button>
             <button class="button ghost import-export-action" :disabled="busy" @click="exportEsq(true)"><Sparkles :size="20" />含 AI 标签</button>
@@ -941,7 +968,7 @@ async function exportEsq(includeLabels = false) {
       <section v-show="section === 'esq'" v-if="esqCurrent?.preview" class="grid">
         <div class="card">
           <div style="display:flex;justify-content:space-between;align-items:center">
-            <div><span class="pill">ESQ {{ esqCurrent.draft_data?.manifest?.schemaVersion || '1.0' }}</span><h2 style="margin-top:12px">{{ esqCurrent.preview.title }}</h2><p class="lead" style="font-size:12px;margin-top:7px">导入目标题库：{{ esqDestinationName }} · 发布者：{{ esqCurrent.preview.publisher }} · {{ esqCurrent.preview.contentVersion }}</p></div>
+            <div><span class="pill">ESQ {{ esqCurrent.draft_data?.manifest?.schemaVersion || '1.0' }}</span><h2 style="margin-top:12px">{{ esqCurrent.preview.title }}</h2><p class="lead" style="font-size:0.75rem;margin-top:7px">导入目标题库：{{ esqDestinationName }} · 发布者：{{ esqCurrent.preview.publisher }} · {{ esqCurrent.preview.contentVersion }}</p></div>
             <button class="button" :disabled="busy || esqCurrent.status === 'published'" @click="publishEsq"><FileCheck2 :size="17" />{{ esqCurrent.status === 'published' ? '已入库' : '发布题库包' }}</button><button class="button secondary" :disabled="busy" @click="closeEsqPreview">关闭预览</button>
           </div>
           <div class="grid grid-4" style="margin-top:18px">
@@ -953,9 +980,9 @@ async function exportEsq(includeLabels = false) {
         </div>
         <div class="card">
           <h3>冲突处理</h3>
-          <p class="lead" style="font-size:12px;margin:8px 0 14px">本地已存在的年份必须明确选择，程序不会自动替换。</p>
+          <p class="lead" style="font-size:0.75rem;margin:8px 0 14px">本地已存在的年份必须明确选择，程序不会自动替换。</p>
           <div v-for="item in esqCurrent.preview.conflicts" :key="item.paperKey" class="api-model-row">
-            <div><strong>{{ item.year }} 年</strong><div class="lead" style="font-size:12px">{{ item.title }}</div></div>
+            <div><strong>{{ item.year }} 年</strong><div class="lead" style="font-size:0.75rem">{{ item.title }}</div></div>
             <div v-if="item.existing" style="display:flex;gap:6px">
               <button class="button compact" :class="{secondary:esqResolutions[item.paperKey] !== 'replace_with_imported'}" @click="conflictAction(item.paperKey,'replace_with_imported')">替换</button>
               <button class="button compact" :class="{secondary:esqResolutions[item.paperKey] !== 'keep_existing'}" @click="conflictAction(item.paperKey,'keep_existing')">保留本地</button>
@@ -966,7 +993,7 @@ async function exportEsq(includeLabels = false) {
       </section>
       <section v-show="section === 'document'" v-if="current?.draft" class="grid">
         <div class="card">
-          <div style="display:flex;justify-content:space-between;align-items:center"><div><span class="pill">{{ current.draft.detected_format }}</span><h2 style="margin-top:12px">{{ current.draft.title }}</h2><p class="lead" style="font-size:12px;margin-top:7px">试卷来源：{{ current.draft.source_file }} · 答案来源：{{ current.draft.answer_source || '未提供' }}</p></div><button class="button" :disabled="draftReadOnly" @click="publish"><FileCheck2 :size="17" />批准入库</button></div>
+          <div style="display:flex;justify-content:space-between;align-items:center"><div><span class="pill">{{ current.draft.detected_format }}</span><h2 style="margin-top:12px">{{ current.draft.title }}</h2><p class="lead" style="font-size:0.75rem;margin-top:7px">试卷来源：{{ current.draft.source_file }} · 答案来源：{{ current.draft.answer_source || '未提供' }}</p></div><button class="button" :disabled="draftReadOnly" @click="publish"><FileCheck2 :size="17" />批准入库</button></div>
           <div class="answer-status" :class="current.draft.answer_status?.status || 'missing'">
             <FileKey2 :size="18" />
             <div><strong>{{ answerProgress.completed }}/{{ answerProgress.total }} 道答案已填写</strong><span>{{ current.draft.answer_status?.message || '请在下方校对并补全标准答案' }}</span></div>
@@ -1192,7 +1219,7 @@ async function exportEsq(includeLabels = false) {
     <div v-if="assistDialogOpen" class="review-overlay" role="dialog" aria-modal="true" aria-label="模型辅助不可用">
       <div class="review-card import-assist-dialog">
         <h3 style="margin-bottom:10px">模型辅助不可用</h3>
-        <p class="lead" style="font-size:13px;line-height:1.7">本地解析已完成，草稿已保留，可以直接人工审查。原因：{{ assistError }}</p>
+        <p class="lead" style="font-size:0.8125rem;line-height:1.7">本地解析已完成，草稿已保留，可以直接人工审查。原因：{{ assistError }}</p>
         <div v-if="!showModelSelector" style="display:flex;gap:10px;margin-top:20px;justify-content:center">
           <button class="button ghost" @click="assistDialogOpen=false">人工审查</button>
           <button class="button" @click="showModelSelector=true;openModelSelector()">选择其他模型重试</button>
@@ -1204,7 +1231,7 @@ async function exportEsq(includeLabels = false) {
               <option v-for="model in selectorModels" :key="`${model.profile_id}|${model.model_id}`" :value="`${model.profile_id}|${model.model_id}`">{{ model.profile_name }} / {{ model.model_id }}</option>
             </select>
           </label>
-          <p v-if="!selectorModels.length && !assistBusy" class="lead" style="font-size:12px;margin-top:8px">没有可用模型，请先在“模型与设置”中配置并启用 API。</p>
+          <p v-if="!selectorModels.length && !assistBusy" class="lead" style="font-size:0.75rem;margin-top:8px">没有可用模型，请先在“模型与设置”中配置并启用 API。</p>
           <div style="display:flex;gap:10px;margin-top:16px;justify-content:center">
             <button class="button ghost" @click="showModelSelector=false">返回</button>
             <button class="button" :disabled="!selectedModelKey || assistBusy" @click="retryAssist">{{ assistBusy ? '正在解析…' : '使用该模型重试' }}</button>
@@ -1216,7 +1243,7 @@ async function exportEsq(includeLabels = false) {
     <div v-if="importConfirmOpen" class="review-overlay" role="dialog" aria-modal="true" aria-labelledby="single-import-title">
       <div class="review-card import-assist-dialog">
         <h3 id="single-import-title" style="margin-bottom:10px">确认开始导入</h3>
-        <p class="lead" style="font-size:13px;line-height:1.7">
+        <p class="lead" style="font-size:0.8125rem;line-height:1.7">
           当前一次只允许导入一套题目。同一个 Word / PDF 文件如果包含多套真题，系统只会默认生成并导入第 1 套，其余套次会被忽略。
         </p>
         <div style="display:flex;gap:10px;margin-top:20px;justify-content:center">
@@ -1270,7 +1297,7 @@ async function exportEsq(includeLabels = false) {
 .import-page-title{display:grid;justify-items:start;gap:10px;min-width:0}.import-page-title h1{margin:0}
 .import-nav{display:flex;justify-content:flex-end;align-items:center;gap:12px;flex:0 0 auto;margin:0}.import-nav .button{white-space:nowrap}
 .import-home,.import-export,.import-records{margin-bottom:20px}.import-entrances{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
-.import-export-action{min-height:48px;min-width:148px;padding:12px 20px;font-size:16px;line-height:1.4;gap:10px;white-space:normal}.import-export-action>svg{flex-shrink:0}
+.import-export-action{min-height:48px;min-width:148px;padding:12px 20px;font-size:1rem;line-height:1.4;gap:10px;white-space:normal}.import-export-action>svg{flex-shrink:0}
 .import-entrance{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:12px;text-align:left;color:var(--ink);font:inherit;min-height:148px;width:100%;cursor:pointer}.import-entrance small{color:var(--muted)}.import-entrance:hover,.import-entrance:focus-visible{border-color:var(--primary)}
 .source-heading{display:flex;align-items:center;gap:14px;min-width:0}.source-heading>svg{color:var(--primary);flex-shrink:0}.source-heading h2,.source-heading h3{margin:0;font-size:clamp(1.25rem,1rem + .5vw,1.5rem)}
 .import-records{display:grid;gap:12px}.review-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.import-record-row{display:flex;align-items:center;gap:12px;border-top:1px solid var(--line);padding-top:12px;min-width:0;flex-wrap:wrap}.import-record-open{display:flex;align-items:center;gap:12px;flex:1;min-width:180px;text-align:left;color:var(--ink);background:transparent;border:0;padding:8px 0;font:inherit;min-height:48px}.import-record-open>svg{color:var(--primary);flex-shrink:0}.import-record-open>span{display:grid;gap:5px;min-width:0}.import-record-open small{color:var(--muted)}

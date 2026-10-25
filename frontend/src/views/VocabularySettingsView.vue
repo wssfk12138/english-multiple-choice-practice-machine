@@ -76,11 +76,11 @@ function setGroup(group: DisplayGroup, value: boolean) {
 .display-group-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 8px; }
 .display-group-head .settings-hub-group-title { margin: 0; }
 .display-group-actions { display: flex; gap: 7px; }
-.display-group-actions button { min-height: 36px; padding: 0 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-solid); color: var(--muted); font-size: 13px; }
+.display-group-actions button { min-height: 36px; padding: 0 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-solid); color: var(--muted); font-size: 0.8125rem; }
 .display-group-actions button:hover { border-color: var(--primary); color: var(--primary); }
 .display-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .display-option { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 60px; padding: 12px 16px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); cursor: pointer; }
-.display-option span { font-size: 16px; font-weight: 600; }
+.display-option span { font-size: 1rem; font-weight: 600; }
 .display-option input { flex: none; width: 19px; height: 19px; accent-color: var(--primary); cursor: pointer; }
 @media (max-width: 760px) {
   .display-options { grid-template-columns: 1fr; }

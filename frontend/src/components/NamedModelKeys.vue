@@ -219,9 +219,9 @@ async function edit(action: string, identity = '') {
 .named-keys input { min-width: 0; width: 100%; }
 .named-keys input[type=radio] { width: 16px; height: 16px; margin: 0; }
 .named-keys button { width: 44px; height: 44px; padding: 0; display: grid; place-items: center; border-radius: 6px; border: 1px solid var(--line); background: var(--surface-solid); color: var(--ink); }
-.no-key { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.no-key { display: flex; align-items: center; gap: 8px; font-size: 0.875rem; }
 .key-heading,.key-heading label { display:flex; align-items:center; gap:8px; }
-.key-heading label { font-size:12px; }
+.key-heading label { font-size:0.75rem; }
 .key-heading .key-add { margin-left:auto; width:auto; display:flex; gap:4px; border:0; }
 .named-keys .no-key-switch { width:44px; height:44px; border:0; background:transparent; }
 .no-key-switch > span { display:block; width:37.8px; height:22.4px; padding:2px; border-radius:20px; background:var(--muted); }
@@ -233,28 +233,28 @@ async function edit(action: string, identity = '') {
 /* 横屏：名称后补掩码后四位，整行做成可点胶囊，右侧铅笔/垃圾桶各自 44×44。 */
 html[data-platform="android"][data-orientation="landscape"] .named-keys { margin:0; }
 html[data-platform="android"][data-orientation="landscape"] .key-heading { display:flex; align-items:center; gap:10px; min-height:44px; }
-html[data-platform="android"][data-orientation="landscape"] .key-heading > strong { font-size:17px; font-weight:700; }
-html[data-platform="android"][data-orientation="landscape"] .key-heading label { display:flex; align-items:center; gap:6px; color:var(--muted); font-size:13px; }
-html[data-platform="android"][data-orientation="landscape"] .key-heading .key-add { margin-left:auto; width:auto; min-height:44px; padding:0 10px; display:flex; align-items:center; gap:4px; border:0; background:transparent; color:var(--primary); font-size:15px; font-weight:600; }
+html[data-platform="android"][data-orientation="landscape"] .key-heading > strong { font-size:1.0625rem; font-weight:700; }
+html[data-platform="android"][data-orientation="landscape"] .key-heading label { display:flex; align-items:center; gap:6px; color:var(--muted); font-size:0.8125rem; }
+html[data-platform="android"][data-orientation="landscape"] .key-heading .key-add { margin-left:auto; width:auto; min-height:44px; padding:0 10px; display:flex; align-items:center; gap:4px; border:0; background:transparent; color:var(--primary); font-size:0.9375rem; font-weight:600; }
 html[data-platform="android"][data-orientation="landscape"] .key-list { display:grid; gap:8px; margin-top:8px; }
 html[data-platform="android"][data-orientation="landscape"] .key-row { display:grid; grid-template-columns:22px minmax(0,1fr) 44px 44px; align-items:center; gap:8px; min-height:56px; margin:0; padding:0 6px 0 14px; border:1px solid var(--line); border-radius:999px; background:var(--surface-solid); }
 html[data-platform="android"][data-orientation="landscape"] .key-row:has(input:checked) { border-color:var(--primary); background:var(--primary-faint); }
 html[data-platform="android"][data-orientation="landscape"] .key-row input[type=radio] { width:22px; height:22px; }
 html[data-platform="android"][data-orientation="landscape"] .key-row button { border:0; border-radius:999px; }
 html[data-platform="android"][data-orientation="landscape"] .key-alias { display:flex; align-items:baseline; gap:10px; min-width:0; }
-html[data-platform="android"][data-orientation="landscape"] .key-alias strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:15px; font-weight:600; }
-html[data-platform="android"][data-orientation="landscape"] .key-alias small { display:block; flex:none; color:var(--muted); font-size:13px; letter-spacing:.14em; font-variant-numeric:tabular-nums; }
-html[data-platform="android"][data-orientation="landscape"] .key-alias input { border-color:transparent; padding:4px; background:transparent; font-size:15px; }
-html[data-platform="android"][data-orientation="landscape"] .key-more { width:100%; min-height:44px; margin-top:2px; border:1px dashed var(--line-strong); border-radius:14px; background:transparent; color:var(--muted); font-size:14px; }
+html[data-platform="android"][data-orientation="landscape"] .key-alias strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:0.9375rem; font-weight:600; }
+html[data-platform="android"][data-orientation="landscape"] .key-alias small { display:block; flex:none; color:var(--muted); font-size:0.8125rem; letter-spacing:.14em; font-variant-numeric:tabular-nums; }
+html[data-platform="android"][data-orientation="landscape"] .key-alias input { border-color:transparent; padding:4px; background:transparent; font-size:0.9375rem; }
+html[data-platform="android"][data-orientation="landscape"] .key-more { width:100%; min-height:44px; margin-top:2px; border:1px dashed var(--line-strong); border-radius:14px; background:transparent; color:var(--muted); font-size:0.875rem; }
 html[data-platform="android"][data-orientation="landscape"] .key-more:hover { border-color:var(--primary); color:var(--primary); }
-.key-sheet-meta { padding:12px 2px 0; color:var(--muted); font-size:13px; line-height:1.6; }
+.key-sheet-meta { padding:12px 2px 0; color:var(--muted); font-size:0.8125rem; line-height:1.6; }
 .key-sheet .app-sheet-option { gap:12px; padding:10px 12px; cursor:pointer; }
 .key-sheet .app-sheet-option input[type=radio] { flex:none; width:22px; height:22px; margin:0; accent-color:var(--primary); }
 .key-sheet .key-sheet-name { display:flex; align-items:center; gap:8px; min-width:0; }
-.key-sheet .key-sheet-name strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:16px; font-weight:600; }
-.key-sheet .key-sheet-name input { min-height:40px; font-size:15px; }
-.key-sheet .app-sheet-option-copy small { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px; }
-.key-sheet-live { flex:none; padding:2px 7px; border-radius:999px; color:var(--success); background:var(--primary-soft); font-size:12px; font-style:normal; font-weight:700; }
+.key-sheet .key-sheet-name strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:1rem; font-weight:600; }
+.key-sheet .key-sheet-name input { min-height:40px; font-size:0.9375rem; }
+.key-sheet .app-sheet-option-copy small { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:0.78125rem; }
+.key-sheet-live { flex:none; padding:2px 7px; border-radius:999px; color:var(--success); background:var(--primary-soft); font-size:0.75rem; font-style:normal; font-weight:700; }
 .key-sheet-icon { flex:none; width:44px; height:44px; display:grid; place-items:center; border:1px solid var(--line); border-radius:999px; background:var(--surface-solid); color:var(--ink); }
 .key-sheet-icon.danger-text { color:var(--danger); }
 .key-sheet-foot { display:flex; justify-content:flex-end; padding-top:10px; border-top:1px solid var(--line); }

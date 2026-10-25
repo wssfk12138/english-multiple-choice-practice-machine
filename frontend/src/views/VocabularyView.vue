@@ -1235,7 +1235,7 @@ function filterCount(key: string) {
       <div v-if="reviewLoading" :inert="discriminationOpen" class="review-card vocabulary-review-card" data-review-fullscreen aria-busy="true">
         <header class="review-header">
           <strong>{{ reviewKind === 'scheduled' ? '每日一背' : '额外巩固' }} <span>{{ String(reviewIndex + 1).padStart(2, '0') }} / --</span></strong>
-          <button class="review-close" type="button" title="退出复习" aria-label="退出复习" :disabled="reviewSaving" @click="closeReview">退出复习</button>
+          <button class="button ghost review-close" type="button" title="退出复习" aria-label="退出复习" :disabled="reviewSaving" @click="closeReview">退出复习</button>
         </header>
         <div class="review-content">
           <div class="review-term">…</div>
@@ -1246,7 +1246,7 @@ function filterCount(key: string) {
         <header class="review-header">
           <!-- 进度分母：正式复习读整队到期计数（分页只带回队首，用已取到的行数当分母会从 12 一路跳到真实总数）；额外巩固读本轮选中的条数。 -->
           <strong>{{ reviewKind === 'scheduled' ? '每日一背' : '额外巩固' }} <span>{{ String(reviewIndex + 1).padStart(2, '0') }} / {{ String(reviewKind === 'scheduled' ? displayCount(counts.review) : reviewItems.length).padStart(2, '0') }}</span></strong>
-          <button class="review-close" type="button" title="退出复习" aria-label="退出复习" :disabled="reviewSaving" @click="closeReview">退出复习</button>
+          <button class="button ghost review-close" type="button" title="退出复习" aria-label="退出复习" :disabled="reviewSaving" @click="closeReview">退出复习</button>
         </header>
         <div class="review-content">
           <div class="review-term"><VocabularyTerm :term="reviewSnapshot.term" :frequent="reviewSnapshot.is_frequent" /></div>
@@ -1353,22 +1353,22 @@ function filterCount(key: string) {
 </template>
 
 <style scoped>
-.review-group-badge { display: inline-flex; margin-top: 10px; padding: 3px 10px; border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--line)); border-radius: 999px; background: var(--primary-soft); color: var(--primary); font-size: 12px; font-weight: 650; }
-.review-discrimination-entry { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 10px; margin-top: 12px; color: var(--muted); font-size: 13px; }
+.review-group-badge { display: inline-flex; margin-top: 10px; padding: 3px 10px; border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--line)); border-radius: 999px; background: var(--primary-soft); color: var(--primary); font-size: 0.75rem; font-weight: 650; }
+.review-discrimination-entry { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 10px; margin-top: 12px; color: var(--muted); font-size: 0.8125rem; }
 .review-discrimination-overlay { position: fixed; inset: 0; z-index: 8; display: grid; place-items: center; padding: 20px; background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(6px); }
 .review-discrimination-panel { width: min(760px, calc(100vw - 32px)); max-height: min(680px, calc(100dvh - 40px)); overflow: auto; padding: 24px; text-align: left; }
 .review-discrimination-panel > header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
-.review-discrimination-panel > header strong { font-size: 20px; }
-.review-discrimination-panel > header span { color: var(--muted); font-size: 13px; }
+.review-discrimination-panel > header strong { font-size: 1.25rem; }
+.review-discrimination-panel > header span { color: var(--muted); font-size: 0.8125rem; }
 .review-discrimination-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
 .review-discrimination-grid article { min-width: 0; padding: 15px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
-.review-discrimination-grid h2 { margin: 0 0 6px; font: 650 28px/1.25 Cambria, Georgia, serif; overflow-wrap: anywhere; }
+.review-discrimination-grid h2 { margin: 0 0 6px; font: 650 1.75rem/1.25 Cambria, Georgia, serif; overflow-wrap: anywhere; }
 .review-discrimination-grid .tts-phonetic-line { margin: 0; }
 .review-discrimination-meaning { margin: 12px 0 0; color: var(--ink); line-height: 1.7; overflow-wrap: anywhere; }
 .review-spelling-diff { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 14px; }
 .review-spelling-diff > div { padding: 12px 15px; border-radius: 12px; background: var(--primary-soft); }
 .review-spelling-diff small { color: var(--muted); }
-.review-spelling-diff p { margin: 6px 0 0; font: 650 28px/1.3 ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .04em; overflow-wrap: anywhere; }
+.review-spelling-diff p { margin: 6px 0 0; font: 650 1.75rem/1.3 ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .04em; overflow-wrap: anywhere; }
 .review-spelling-diff .changed{color:var(--ink);text-decoration:underline;text-decoration-thickness:3px;text-decoration-color:#c77613;background:color-mix(in srgb,#f59e0b 18%,transparent);border-radius:4px}
 @media(max-width:600px){.review-discrimination-grid,.review-spelling-diff{grid-template-columns:1fr}.review-discrimination-panel{padding:16px}}
 
@@ -1377,7 +1377,12 @@ function filterCount(key: string) {
 .vocabulary-review-card .review-header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex:none;min-height:36px}
 .vocabulary-review-card .review-close{position:static;flex:none}
 .vocabulary-review-card .review-content{flex:1;min-height:0;overflow-y:auto;padding:8px 0}
-.vocabulary-review-card .review-term{margin-top:4px;font-size:clamp(28px,4vw,44px);overflow-wrap:anywhere}
+@media(max-height:480px){
+  .vocabulary-review-overlay{align-items:start}
+  .vocabulary-review-card{height:auto;min-height:480px}
+  .vocabulary-review-card .review-content{flex:none;min-height:240px;max-height:420px}
+}
+.vocabulary-review-card .review-term{margin-top:4px;font-size:clamp(1.75rem,4vw,2.75rem);overflow-wrap:anywhere}
 .vocabulary-review-card .review-answer{margin-top:16px}
 .vocabulary-review-card .answer-reserved{visibility:hidden;pointer-events:none}
 .review-controls{display:grid;flex:none;min-width:0;padding-top:12px;border-top:1px solid var(--line)}
@@ -1386,7 +1391,7 @@ function filterCount(key: string) {
 .review-controls .review-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
 .vocab-term-meta{color:var(--muted);font-size:.875rem}
 @media(min-width:980px){.vocab-list{max-height:calc(var(--app-vh,100dvh) - 260px);min-height:180px;overflow-y:auto}}
-@media(max-height:500px){.vocabulary-review-card{padding:12px}.vocabulary-review-card .review-term{font-size:28px}.vocabulary-review-card .review-answer{margin-top:8px}.review-controls{padding-top:8px}}
+@media(max-height:500px){.vocabulary-review-card{padding:12px}.vocabulary-review-card .review-term{font-size:1.75rem}.vocabulary-review-card .review-answer{margin-top:8px}.review-controls{padding-top:8px}}
 
 .vocab-reinforcement {
   position: relative;
@@ -1438,7 +1443,7 @@ function filterCount(key: string) {
   border-radius: 999px;
   background: var(--surface);
   color: var(--muted);
-  font-size: 14px;
+  font-size: 0.875rem;
 }
 
 .vocab-stat-chip strong { color: var(--ink); font-weight: 650; }
@@ -1448,9 +1453,9 @@ function filterCount(key: string) {
 .vocab-detail-head h2 { overflow-wrap: anywhere; }
 .review-star { color: #c08a3e; }
 .review-meaning-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
-.review-part-of-speech { padding: 2px 8px; border-radius: 6px; background: var(--primary-soft); color: var(--ink); font-size: 13px; line-height: 1.5; }
+.review-part-of-speech { padding: 2px 8px; border-radius: 6px; background: var(--primary-soft); color: var(--ink); font-size: 0.8125rem; line-height: 1.5; }
 .review-answer .review-meaning-block > strong { display: block; line-height: 1.65; overflow-wrap: anywhere; }
-.detail-sentence { margin: 0; font-family: Cambria, Georgia, serif; font-size: 16px; line-height: 1.68; overflow-wrap: anywhere; white-space: normal; }
+.detail-sentence { margin: 0; font-family: Cambria, Georgia, serif; font-size: 1rem; line-height: 1.68; overflow-wrap: anywhere; white-space: normal; }
 .vocab-enrich-error { white-space: normal; overflow-wrap: anywhere; line-height: 1.7; }
 
 @media (max-width: 720px) {

@@ -16,6 +16,11 @@ const member=id=>({id,term:id===43?'pneumonoultramicroscopicsilicovolcanoconiosi
 function detail(id,variant){return {...member(id),daily_study_identity:'synthetic-'+id,common_meaning:'证据；依据；可用于判断和推理的事实。',contextual_meaning:'用于研究结论的事实依据。',phonetic:'/ˈevɪdəns/',part_of_speech:'n.',latest_sentence:'Researchers compare evidence and revise their explanations. '.repeat(variant==='long'?70:4),occurrences:[{year:2026,unit_title:'合成样本'}],generated_example:{sentence:'The evidence supports this conclusion.',translation:'证据支持这一结论。'},memory_hint:'把 evidence 与 evident 联系记忆，从清楚可见的事实想到证据。',note:'已有笔记。\n'.repeat(variant==='long'?160:3),morphology:{forms:[{label:'形容词',word:'evident'}],note:'通过后缀联系词形。'},similar_forms:[{word:'evident',note:'形容词'}],synonyms:[{word:'proof',note:'强调能够证实结论的证据。'}],antonyms:[{word:'assumption',note:'未经证实的假设。'}],...(variant==='short'?{memory_hint:'',contextual_meaning:'',latest_sentence:'',generated_example:null,note:'',morphology:null,similar_forms:[],synonyms:[],antonyms:[]}: {})}}
 function api(url,method,variant){
  const u=new URL(url,'http://local'),p=u.pathname.slice(4)
+ if(p==='/papers')return [{id:1,title:'合成长标题试卷：保留阅读尺度和卡片操作关系',subject:'英语一',unit_count:1,question_count:5,status:'published'}]
+ if(p==='/updates/settings')return {manifest_url:'https://github.com/wssfk12138/english-multiple-choice-practice-machine/releases/latest/download/windows-update.json',question_bank_catalog_url:'https://example.org/catalog.json',current_version:'test',current_version_code:1}
+ if(p==='/updates/status')return {currentVersion:'test',currentVersionCode:1,manifestUrl:'https://github.com/wssfk12138/english-multiple-choice-practice-machine/releases/latest/download/windows-update.json'}
+ if(p==='/remote-question-banks/settings')return {question_bank_catalog_url:'https://example.org/catalog.json'}
+ if(p==='/updates/question-banks/check'||p==='/remote-question-banks/check')return {catalogVersion:1,packages:[{packageId:'synthetic',contentVersion:'test',title:'合成长题库标题：校验后仍只建立草稿',years:[2026],size:1024,license:'Synthetic fixture'}]}
  if(p==='/question-bank-profiles')return profiles
  if(p==='/imports')return [draft]
  if(p==='/imports/10')return {...draft,draft_data:draft.draft}
@@ -24,6 +29,8 @@ function api(url,method,variant){
  if(p==='/ai/question-labels/status')return labels
  if(p==='/ai/question-labels')return []
  if(p==='/ai/profiles')return []
+ if(p==='/ai/selector-models')return {models:[{profile_id:1,profile_name:'Synthetic fixture',model_id:'synthetic-no-network',display_name:'Synthetic fixture',is_default:true}]}
+ if(p==='/ai/conversations')return []
  if(p==='/vocabulary/daily-study/catalog')return {scope_key:'synthetic:all',revision:'v2:1',items:Array.from({length:43},(_,i)=>member(i+1))}
  if(p==='/vocabulary/daily-study/status')return {scope_key:'synthetic:all',revision:'v2:1'}
  const m=p.match(/^\/vocabulary\/(\d+)$/);if(m)return detail(Number(m[1]),variant)
@@ -96,6 +103,60 @@ for(const [index,root] of roots.entries()){
  }
  variant='short';await page.goto(origin+'/vocabulary/daily-study');await ready(4);assert.equal(await page.locator('.reading-flow.single-short').count(),1)
  assert.equal(await page.locator('.reading-flow').evaluate(e=>getComputedStyle(e).columnCount),'auto')
+
+ // Approved desktop scale, shared feedback control and merged catalog routing.
+ for(const size of [{width:1920,height:1080},{width:1205,height:721},{width:1024,height:600},{width:320,height:700}]){
+  await page.setViewportSize(size);await page.goto(origin+'/settings/model');await page.locator('.settings-about').waitFor();await noOverflow('model-parity-'+size.width)
+  const model=await page.evaluate(()=>{
+   const help=document.querySelector('.settings-about-heading').getBoundingClientRect(),actions=document.querySelector('.settings-about-actions').getBoundingClientRect(),feedback=document.querySelector('.feedback-link'),r=feedback.getBoundingClientRect(),text=feedback.querySelector('span').getBoundingClientRect(),icon=feedback.querySelector('svg').getBoundingClientRect()
+   return {font:parseFloat(getComputedStyle(document.body).fontSize),button:parseFloat(getComputedStyle(feedback).fontSize),help:help.toJSON(),actions:actions.toJSON(),feedback:r.toJSON(),text:text.toJSON(),icon:icon.toJSON(),label:feedback.innerText,rootZoom:getComputedStyle(document.documentElement).zoom}
+  })
+  assert.equal(model.font,20.4);assert.equal(model.button,19.2);assert.equal(model.rootZoom,'1');assert.equal(model.label,'问题反馈');assert.ok(model.text.right<model.icon.left,'feedback text precedes QQ');assert.ok(model.feedback.height>=52)
+  if(size.width>=1205)assert.ok(model.actions.top<model.help.bottom&&model.help.top<model.actions.bottom,'help and actions share a row')
+  await shot('model-parity-'+size.width)
+  await page.goto(origin+'/settings/updates');await page.locator('#question-banks').waitFor();await noOverflow('updates-parity-'+size.width)
+  assert.equal(await page.getByRole('heading',{name:'更新与远程题库',exact:true}).count(),1);assert.equal(await page.getByRole('heading',{name:'程序更新',exact:true}).count(),1);assert.equal(await page.locator('.feedback-link').count(),1)
+  assert.equal(await page.locator('.github-link').getAttribute('href'),'https://github.com/wssfk12138/english-multiple-choice-practice-machine')
+  const buttons=await page.locator('.update-community .button').evaluateAll(es=>es.filter(e=>e.classList.contains('feedback-link')||e.classList.contains('github-link')).map(e=>e.getBoundingClientRect().toJSON()))
+  assert.ok(Math.abs(buttons[0].height-buttons[1].height)<=2,'feedback and GitHub equal height')
+  if(size.width>=1205)assert.ok(Math.abs(buttons[0].top-buttons[1].top)<=2,'feedback and GitHub same row')
+  await page.getByRole('button',{name:'获取题库列表',exact:true}).click();await page.getByText('合成长题库标题：校验后仍只建立草稿',{exact:true}).waitFor();await noOverflow('catalog-content-'+size.width)
+  const beforeDownloads=calls.filter(c=>c.url.endsWith('/download')).length;await page.locator('#question-banks input[type=checkbox]').check();assert.equal(calls.filter(c=>c.url.endsWith('/download')).length,beforeDownloads,'selection never downloads automatically')
+  await shot('updates-parity-'+size.width)
+ }
+ if(await fs.readFile(path.join(root,'frontend/src/router.ts'),'utf8').then(s=>s.includes("path: '/remote-question-banks'"))){
+  await page.goto(origin+'/remote-question-banks?from=legacy');await page.locator('#question-banks').waitFor();await page.waitForURL('**/settings/updates?from=legacy#question-banks');await page.reload();await page.locator('#question-banks').waitFor();assert.ok(page.url().endsWith('#question-banks'));evidence.push({channel,name:'legacy-remote-route-query-hash-refresh',passed:true})
+ }
+ evidence.push({channel,name:'scale-feedback-help-merged-catalog',passed:true,viewports:[1920,1205,1024,320]})
+
+
+ await page.setViewportSize({width:1205,height:721});await page.goto(origin+'/library');await page.locator('.paper-card').first().waitFor()
+ const paper=await page.locator('.paper-card').first().evaluate(e=>{const head=e.querySelector('.paper-card-head'),icon=head.querySelector('svg');return {layout:getComputedStyle(e).display,head:getComputedStyle(head).display,headBox:head.getBoundingClientRect().toJSON(),iconBox:icon.getBoundingClientRect().toJSON()}})
+ assert.equal(paper.layout,'flex');assert.equal(paper.head,'flex');assert.ok(paper.iconBox.left>paper.headBox.left+paper.headBox.width/2,'paper icon stays on right');evidence.push({channel,name:'paper-card-shared-relationships',passed:true})
+ await page.goto(origin+'/settings/updates');await page.getByRole('heading',{name:'程序更新',exact:true}).waitFor();assert.equal(await page.getByRole('heading',{name:'程序更新',exact:true}).evaluate(e=>getComputedStyle(e).fontSize),'24px');evidence.push({channel,name:'maintenance-heading-scale',passed:true})
+
+
+ await page.goto(origin+'/settings/model');await page.locator('.feedback-link').waitFor();await page.locator('.feedback-link').click()
+ assert.equal(await page.locator('.feedback-fallback').count(),0)
+ assert.equal(await page.getByRole('button',{name:'复制群号 1012639381',exact:true}).count(),0)
+ evidence.push({channel,name:'qq-protocol-link-without-failure-prompt-per-user-request',passed:true})
+
+
+ for(const size of [{width:846,height:395},{width:423,height:197}]){
+  await page.setViewportSize(size);await page.goto(origin+'/assistant');await page.locator('.ai-messages').waitFor()
+  const chat=await page.locator('.ai-messages').evaluate(e=>e.getBoundingClientRect().height)
+  assert.ok(chat>=150,'low-height conversation remains readable: '+chat)
+  await page.locator('.ai-composer textarea').fill('Synthetic local input; never submitted.')
+  assert.equal(await page.locator('.ai-composer textarea').inputValue(),'Synthetic local input; never submitted.')
+  await noOverflow('assistant-low-height-'+size.width)
+  await page.goto(origin+'/vocabulary/daily-study');await page.getByRole('button',{name:'1 evidence1',exact:true}).click();await ready(1)
+  assert.ok(await page.locator('.study-scroll[data-identity]').evaluate(e=>e.clientHeight)>=150,'low-height learning content remains readable')
+  await page.locator('.study-footer .next').click();await ready(2)
+  assert.ok(await page.locator('.daily-study-shell').evaluate(e=>e.scrollHeight>e.clientHeight),'short window can scroll the whole learning surface')
+  await noOverflow('daily-study-low-height-'+size.width)
+ }
+ evidence.push({channel,name:'low-height-chat-and-learning-content-and-input-navigation',passed:true})
+
  await context.close();await new Promise(r=>server.close(r));assert.deepEqual(errors,[],'Browser errors')
  evidence.push({channel,name:'browser-errors',count:errors.length})
 }

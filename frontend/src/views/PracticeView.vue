@@ -1055,7 +1055,7 @@ async function copySelectedTerm() {
             <span class="option-letter">{{ option.label }}</span>
             <span class="option-content" data-vocab-text><ContentBlocks v-if="option.content_blocks?.length" :blocks="option.content_blocks" :package-id="activeContentPackage.packageId" :content-version="activeContentPackage.contentVersion" /><template v-else>{{ option.content }}</template></span>
           </button>
-          <div v-if="activeUnitSubmitted" style="margin-top:10px;font-size:13px" :style="{color:question.is_correct?'var(--success)':'var(--danger)'}">
+          <div v-if="activeUnitSubmitted" style="margin-top:10px;font-size:0.8125rem" :style="{color:question.is_correct?'var(--success)':'var(--danger)'}">
             <CheckCircle2 :size="15" style="vertical-align:-2px" /> {{ question.is_correct ? '回答正确' : '回答错误' }}
           </div>
         </div>

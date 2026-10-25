@@ -23,7 +23,7 @@ onBeforeUnmount(() => { window.removeEventListener('vocab-display-change', refre
 </template>
 <style scoped>
 .vocabulary-display-settings { display:grid; gap:2px; text-align:left; min-width:0; }
-.scope-note { margin:0 0 10px; color:var(--muted); font-size:13px; line-height:1.6; }
+.scope-note { margin:0 0 10px; color:var(--muted); font-size:0.8125rem; line-height:1.6; }
 label { display:flex; align-items:center; justify-content:space-between; gap:16px; min-height:40px; padding:6px 0; border-bottom:1px solid var(--line); cursor:pointer; }
 input { width:18px; height:18px; flex-shrink:0; accent-color:var(--primary); }
 </style>

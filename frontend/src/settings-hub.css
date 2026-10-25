@@ -1,6 +1,6 @@
 /* 设置中枢：从安卓横屏 settings-hub.css 提取的核对子集，平台差异用桌面断点处理。 */
 .settings-hub-group { margin: 0 0 18px; }
-.settings-hub-group-title { margin: 0 0 8px; padding: 0 4px; color: var(--muted); font-size: 13px; font-weight: 700; letter-spacing: .04em; }
+.settings-hub-group-title { margin: 0 0 8px; padding: 0 4px; color: var(--muted); font-size: 0.8125rem; font-weight: 700; letter-spacing: .04em; }
 .settings-hub-rows { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-sm); }
 .settings-hub-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) 52px; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 6px 14px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; box-shadow: none; background: transparent; color: var(--ink); text-align: left; }
 .settings-hub-rows > :last-child { border-bottom: 0; }
@@ -8,7 +8,7 @@
 .settings-hub-row.link:hover { background: var(--primary-faint); }
 .settings-hub-row:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
 .settings-hub-row-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 10px; background: var(--primary-soft); color: var(--primary); }
-.settings-hub-row strong { font-size: 16px; line-height: 1.5; font-weight: 600; }
+.settings-hub-row strong { font-size: 1rem; line-height: 1.5; font-weight: 600; }
 .settings-hub-row-copy { display: grid; gap: 1px; min-width: 0; }
 .settings-hub-row-copy small { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .settings-hub-chevron { justify-self: end; color: var(--muted); transition: transform .2s ease; }
@@ -22,10 +22,10 @@
 .settings-theme-switch[aria-checked="true"] span { background: var(--primary); }
 .settings-theme-switch[aria-checked="true"] span::after { transform: translateX(20px); }
 .settings-theme-switch:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 8px; }
-.settings-hub-brand { display: flex; align-items: center; gap: 7px; justify-content: center; margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.settings-hub-brand { display: flex; align-items: center; gap: 7px; justify-content: center; margin-top: 6px; color: var(--muted); font-size: 0.75rem; line-height: 1.6; }
 
 /* 桌面差异：窗口变窄时行内标题与摘要允许换行，不裁切。 */
 @media (max-width: 1180px) {
   .settings-hub .settings-hub-row { grid-template-columns: 32px minmax(0, 1fr) 40px; }
-  .settings-hub .settings-hub-row strong { font-size: 15px; }
+  .settings-hub .settings-hub-row strong { font-size: 0.9375rem; }
 }

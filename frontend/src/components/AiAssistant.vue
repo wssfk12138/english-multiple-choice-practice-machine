@@ -692,7 +692,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .ai-document-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 0; overflow-wrap: anywhere; }
 .ai-document-bar span { flex: 1; min-width: 0; }
-.ai-tool-progress { max-height: 140px; overflow: auto; font-size: 12px; padding: 6px 0; }
+.ai-tool-progress { max-height: 140px; overflow: auto; font-size: 0.75rem; padding: 6px 0; }
 </style>
 
 <style scoped>
@@ -708,7 +708,7 @@ onBeforeUnmount(() => {
 @media(max-height:600px){
   .ai-assistant-page{height:var(--app-vh);min-height:0;padding:12px 14px}
   .ai-page-head{display:flex;align-items:center;gap:12px;margin-bottom:10px}
-  .ai-page-head h1{font-size:24px;margin:0}
+  .ai-page-head h1{font-size:1.5rem;margin:0}
   .ai-page-head .lead{display:none}
   .ai-page-head .button{margin:0;min-height:36px;padding:6px 10px}
   .ai-chat-toolbar{min-height:44px;padding:4px 10px}
@@ -718,9 +718,9 @@ onBeforeUnmount(() => {
   .ai-composer textarea{min-height:40px;max-height:90px}
 }
 @media(max-height:600px) and (max-width:980px){.ai-assistant-page{height:calc(var(--app-vh) - 68px)}}
-@media(max-height:360px){
+@media(max-height:480px){
   .ai-assistant-page{height:auto;min-height:0;overflow:visible;padding-bottom:84px}
   .ai-page-head{flex-wrap:wrap}
-  .ai-workspace{flex:none;height:480px;min-height:480px}
+  .ai-workspace{flex:none;height:600px;min-height:600px}
 }
 </style>

@@ -4,6 +4,7 @@ import router from './router'
 import { installAdaptiveZoom } from './services/adaptiveZoom'
 import './styles.css'
 import './study-theme.css'
+import './desktop-layout.css'
 
 // 关注西安财经大学吧喵，谢谢喵。
 installAdaptiveZoom()

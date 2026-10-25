@@ -213,4 +213,9 @@ button:focus-visible{outline:3px solid var(--primary);outline-offset:3px}button:
 @media(max-width:600px){.study-scope,.study-top .exit{display:none}.study-top{flex-wrap:wrap;gap:8px}.study-top>strong{font-size:1.125rem}.word-heading h1{font-size:1.625rem}.study-footer{padding:8px 12px;gap:8px}.study-footer>span{display:none}.word-heading{padding:10px 12px}.study-card.card{border-radius:16px}}
 @media(max-height:420px){.study-top{min-height:44px;margin-bottom:6px}.word-heading{padding:8px 14px}.word-heading h1{font-size:1.625rem}.word-heading p{margin-top:2px}.study-footer{padding:6px 14px}.study-workspace{gap:4px}.daily-study-shell{padding-bottom:max(6px,env(safe-area-inset-bottom))}}
 @media(prefers-reduced-motion:reduce){.settling>.study-card{transition:none}}
+@media(max-height:480px){
+  .daily-study-shell{overflow-y:auto}
+  .study-workspace{flex:none;height:560px}
+  .state-card.card{flex:none;min-height:240px}
+}
 </style>

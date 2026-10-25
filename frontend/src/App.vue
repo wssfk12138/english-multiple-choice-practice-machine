@@ -35,16 +35,14 @@ onMounted(() => {
         <span class="brand-mark"><img src="/assets/icons/brand-mark.png" alt="" /></span>
         <span class="brand-copy"><strong>英语刷题机</strong><small>考研英语一 · 本地题库</small></span>
       </RouterLink>
-      <nav aria-label="主要导航">
-        <RouterLink to="/"><Home :size="19" aria-hidden="true" /><span>首页</span></RouterLink>
-        <RouterLink to="/library"><Library :size="19" aria-hidden="true" /><span>题库与练习</span></RouterLink>
-        <RouterLink to="/wrong"><Brain :size="19" aria-hidden="true" /><span>错题本</span></RouterLink>
-        <RouterLink to="/vocabulary"><BookMarked :size="19" aria-hidden="true" /><span>单词本</span></RouterLink>
-        <RouterLink to="/imports"><FileUp :size="19" aria-hidden="true" /><span>导入题库</span></RouterLink>
-        <RouterLink to="/assistant">
-          <MessageCircle :size="19" aria-hidden="true" /><span>AI 学习助手</span>
-        </RouterLink>
-        <RouterLink to="/settings"><Settings2 :size="19" aria-hidden="true" /><span>设置</span></RouterLink>
+      <nav class="desktop-nav" aria-label="主要导航">
+        <RouterLink to="/"><img src="/assets/icons/home.png" alt="" /><span>首页</span></RouterLink>
+        <RouterLink to="/library"><img src="/assets/icons/paper.png" alt="" /><span>题库与练习</span></RouterLink>
+        <RouterLink to="/wrong"><img src="/assets/icons/wrong-book.png" alt="" /><span>错题本</span></RouterLink>
+        <RouterLink to="/vocabulary"><img src="/assets/icons/vocabulary.png" alt="" /><span>单词本</span></RouterLink>
+        <RouterLink to="/imports"><img src="/assets/icons/import.png" alt="" /><span>导入题库</span></RouterLink>
+        <RouterLink to="/assistant"><img src="/assets/icons/ai.png" alt="" /><span>AI 学习助手</span></RouterLink>
+        <RouterLink to="/settings"><Settings2 :size="20" /><span>设置</span></RouterLink>
       </nav>
       <div class="sidebar-note">
         <BookOpenText :size="18" />
@@ -56,7 +54,11 @@ onMounted(() => {
       </button>
     </aside>
     <main class="main-content">
-      <RouterView />
+      <RouterView v-slot="{ Component }">
+        <KeepAlive :include="['ImportView', 'UpdatesSettingsView']">
+          <component :is="Component" />
+        </KeepAlive>
+      </RouterView>
     </main>
   </div>
 </template>
@@ -64,6 +66,6 @@ onMounted(() => {
 <style scoped>
 @media(max-width:980px){
   .sidebar nav{display:flex;overflow-x:auto;overflow-y:hidden;gap:4px;scroll-padding-inline:8px;scrollbar-width:thin}
-  .sidebar nav a{flex:0 0 auto;min-width:104px;padding:4px 10px;white-space:nowrap;font-size:15px;line-height:1.25}
+  .sidebar nav a{flex:0 0 auto;min-width:104px;padding:4px 10px;white-space:nowrap;font-size:0.9375rem;line-height:1.25}
 }
 </style>

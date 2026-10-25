@@ -77,7 +77,7 @@ onBeforeUnmount(() => { void stop(props.ownerId) })
   border-radius: 10px;
   background: var(--surface-solid);
   color: var(--primary);
-  font: 600 13px/1.2 inherit;
+  font: 600 0.8125rem/1.2 inherit;
   white-space: nowrap;
   cursor: pointer;
 }
@@ -101,7 +101,7 @@ onBeforeUnmount(() => { void stop(props.ownerId) })
 .voice-unavailable,
 .voice-error {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 0.75rem;
   white-space: normal;
 }
 .voice-error {
