@@ -13,13 +13,15 @@ import VocabularyView from './views/VocabularyView.vue'
 import DailyStudyView from './views/DailyStudyView.vue'
 import TrashView from './views/TrashView.vue'
 import HelpView from './views/HelpView.vue'
-import RemoteQuestionBanksView from './views/RemoteQuestionBanksView.vue'
 import SyncSettingsView from './views/SyncSettingsView.vue'
 import UpdatesSettingsView from './views/UpdatesSettingsView.vue'
 import DiagnosticsSettingsView from './views/DiagnosticsSettingsView.vue'
 
 export default createRouter({
   history: createWebHistory(),
+  scrollBehavior(to, _from, savedPosition) {
+    return savedPosition || (to.hash ? { el: to.hash, top: 20 } : { top: 0 })
+  },
   routes: [
     { path: '/', component: DashboardView },
     { path: '/library', component: LibraryView },
@@ -39,7 +41,7 @@ export default createRouter({
     { path: '/settings/diagnostics', component: DiagnosticsSettingsView },
     { path: '/trash', component: TrashView },
     { path: '/help', component: HelpView },
-    { path: '/remote-question-banks', component: RemoteQuestionBanksView },
+    { path: '/remote-question-banks', redirect: to => ({ path: '/settings/updates', query: to.query, hash: '#question-banks' }) },
     { path: '/updates', redirect: '/settings/updates' },
   ],
 })

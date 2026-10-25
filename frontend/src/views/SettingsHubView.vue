@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import {
   BookOpen,
-  CloudDownload,
   Database,
   Download,
   Eye,
@@ -31,13 +30,12 @@ function toggleTheme() {
 }
 
 // 每个设置入口对应独立页面；维护三子页与安卓横屏"设备同步/更新/诊断日志"同构。
-// 公测特有的远程题库能力按 NAV-04 保留，并归入设置中枢。
+// 远程题库与程序更新共享入口，内部仍使用公测自己的服务。
 const groups = [
   {
     title: '题库与数据',
     items: [
       { label: '导入题库', to: '/imports', icon: Import },
-      { label: '远程题库', to: '/remote-question-banks', icon: CloudDownload },
       { label: '回收站', to: '/trash', icon: Trash2 },
     ],
   },
@@ -51,7 +49,7 @@ const groups = [
     title: '设备与维护',
     items: [
       { label: '设备同步', to: '/settings/sync', icon: MonitorSmartphone },
-      { label: '更新中心', to: '/settings/updates', icon: Download },
+      { label: '更新与远程题库', to: '/settings/updates', icon: Download },
       { label: '诊断日志', to: '/settings/diagnostics', icon: FileWarning },
     ],
   },

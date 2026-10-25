@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import FeedbackButton from '../components/FeedbackButton.vue'
 import { focusSheet } from '../services/sheetFocus'
 import NamedModelKeys from '../components/NamedModelKeys.vue'
 import { saveModelVisibility, retryModelVisibility, visibilitySaveStates, intendedModelVisibility } from '../services/profileDrafts'
@@ -565,7 +566,7 @@ onMounted(() => {
       </div>
       <div class="settings-about-actions">
         <RouterLink class="button secondary" to="/help"><BookOpen :size="16" />使用帮助</RouterLink>
-        <a class="button ghost" href="https://xiaoheihe.cn/creator/content_management/detail/187311918" target="_blank" rel="noopener noreferrer"><ExternalLink :size="16" />问题反馈</a>
+        <FeedbackButton />
       </div>
     </section>
   </div>
@@ -612,7 +613,7 @@ onMounted(() => {
 .api-connection-layout .api-connection-fields .field { grid-column:1; display:grid; grid-template-columns:100px minmax(0,1fr); gap:12px; align-items:center; margin:0; }
 .api-connection-layout > :deep(.named-keys) { grid-area:1 / 2 / 3 / 3; margin:0; }
 .api-connection-layout > .default-config-switch-row { grid-area:3 / 2 / 4 / 3; width:100%; min-height:44px; margin:0; padding:7px 0; border:0; }
-.api-connection-layout > .default-config-switch-row > span { font-size:15px; font-weight:600; }
+.api-connection-layout > .default-config-switch-row > span { font-size:0.9375rem; font-weight:600; }
 .api-connection-layout::after { content:""; position:absolute; top:0; bottom:0; left:calc(50% - 12px); width:1px; background:var(--line); pointer-events:none; }
 .api-model-setup-grid { grid-template-columns:minmax(0,1.2fr) minmax(0,.85fr) auto; align-items:start; gap:12px; margin-top:12px; padding-top:12px; }
 .api-model-setup-grid .field { display:grid; grid-template-columns:auto minmax(0,1fr); gap:8px; align-items:center; margin:0; }
@@ -643,30 +644,30 @@ onMounted(() => {
 }
 
 /* 横屏卡片排版：字号统一并整体加粗，只在横屏生效，竖屏保持原样。 */
-.api-profile-body { font-size:15px; }
-.api-profile-body .field > label { font-size:15px; font-weight:600; color:var(--ink); }
+.api-profile-body { font-size:0.9375rem; }
+.api-profile-body .field > label { font-size:0.9375rem; font-weight:600; color:var(--ink); }
 .api-profile-body .field input,
 .api-profile-body .field select,
 .api-profile-body :deep(.option-sheet-trigger),
-.api-profile-body :deep(.named-keys input) { font-size:15px; font-weight:600; }
-.api-profile-body .field small { font-size:13px; font-weight:500; }
-.api-profile-copy > span > strong { font-size:17px; font-weight:700; }
-.api-profile-copy > small { font-size:13px; font-weight:600; }
-.api-profile-copy > span > small { font-size:12.5px; font-weight:700; }
-.api-model-toolbar-actions button { min-height:44px; padding:8px 12px; font-size:15px; font-weight:600; }
+.api-profile-body :deep(.named-keys input) { font-size:0.9375rem; font-weight:600; }
+.api-profile-body .field small { font-size:0.8125rem; font-weight:500; }
+.api-profile-copy > span > strong { font-size:1.0625rem; font-weight:700; }
+.api-profile-copy > small { font-size:0.8125rem; font-weight:600; }
+.api-profile-copy > span > small { font-size:0.78125rem; font-weight:700; }
+.api-model-toolbar-actions button { min-height:44px; padding:8px 12px; font-size:0.9375rem; font-weight:600; }
 .api-model-list-toggle { min-height:48px; }
-.api-model-list-toggle > span { font-size:15px; font-weight:600; }
+.api-model-list-toggle > span { font-size:0.9375rem; font-weight:600; }
 .api-profile-summary { grid-template-columns:minmax(0,1fr) 48px 48px; }
 .api-delete-button { width:44px; height:44px; border:1px solid var(--line); border-radius:13px; background:var(--surface-solid); color:var(--muted); }
 .api-delete-button:hover { border-color:color-mix(in srgb, var(--danger) 36%, var(--line)); background:var(--danger-soft); color:var(--danger); }
 
 /* 横屏模型显示列表弹层：复用全局 .app-sheet 结构，行内保留「显示 / 隐藏」开关。 */
-.model-sheet-meta { padding:12px 2px 0; color:var(--muted); font-size:13px; line-height:1.6; }
+.model-sheet-meta { padding:12px 2px 0; color:var(--muted); font-size:0.8125rem; line-height:1.6; }
 .model-sheet .api-model-row { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:12px; min-height:62px; }
 .model-sheet .api-model-row > div { min-width:0; }
-.model-sheet .api-model-row > button { min-width:96px; min-height:44px; font-size:14px; font-weight:600; }
+.model-sheet .api-model-row > button { min-width:96px; min-height:44px; font-size:0.875rem; font-weight:600; }
 .model-sheet-foot { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding-top:10px; border-top:1px solid var(--line); }
-.model-sheet-foot button { min-height:44px; padding:8px 14px; display:flex; align-items:center; gap:6px; border:0; border-radius:12px; background:transparent; color:var(--muted); font-size:15px; font-weight:600; }
+.model-sheet-foot button { min-height:44px; padding:8px 14px; display:flex; align-items:center; gap:6px; border:0; border-radius:12px; background:transparent; color:var(--muted); font-size:0.9375rem; font-weight:600; }
 .model-sheet-foot button:hover { background:var(--primary-faint); color:var(--ink); }
 .model-sheet-foot .model-sheet-done { margin-left:auto; color:var(--ink); background:var(--primary-faint); }
 @media(max-width:900px){.api-connection-layout{display:block}.api-connection-layout::after{display:none}.api-connection-layout .api-connection-fields .field{display:flex;flex-direction:column;align-items:stretch}.api-model-setup-grid{grid-template-columns:1fr}}
