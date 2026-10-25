@@ -24,13 +24,6 @@ OFFICIAL_MANIFEST_URL = (
     "https://github.com/wssfk12138/english-multiple-choice-practice-machine"
     "/releases/latest/download/windows-update.json"
 )
-ALLOWED_UPDATE_HOSTS = frozenset(
-    {
-        "github.com",
-        "objects.githubusercontent.com",
-        "release-assets.githubusercontent.com",
-    }
-)
 UPDATE_DIR = DATA_DIR / "updates"
 MAX_MANIFEST_BYTES = 256 * 1024
 MAX_PACKAGE_BYTES = 1024 * 1024 * 1024
@@ -46,13 +39,24 @@ class UpdateError(ValueError):
 
 def _validate_update_url(raw: Any, *, redirect: bool = False) -> str:
     value = str(raw or "").strip()
-    parsed = urllib.parse.urlsplit(value)
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        port = parsed.port
+    except ValueError as exc:
+        raise UpdateError("更新地址格式无效") from exc
     if parsed.scheme != "https" or not parsed.hostname:
         raise UpdateError("更新地址必须使用 HTTPS")
-    if parsed.username or parsed.password or parsed.port not in (None, 443):
+    if parsed.username or parsed.password or port not in (None, 443):
         raise UpdateError("更新地址包含不允许的连接信息")
-    if parsed.hostname.lower() not in ALLOWED_UPDATE_HOSTS:
-        raise UpdateError("更新地址不属于允许的 GitHub 发布源")
+    host = parsed.hostname.lower()
+    if host == "github.com":
+        path = urllib.parse.unquote(parsed.path)
+        prefix = "/wssfk12138/english-multiple-choice-practice-machine/releases/"
+        if (not path.startswith((prefix + "download/", prefix + "latest/download/"))
+                or any(part in (".", "..") for part in path.split("/")) or "\\" in path):
+            raise UpdateError("更新地址必须属于本项目的 GitHub Release")
+    elif not redirect or host not in {"objects.githubusercontent.com", "release-assets.githubusercontent.com"}:
+        raise UpdateError("更新地址必须属于本项目的 GitHub Release")
     if parsed.fragment or (parsed.query and not redirect):
         raise UpdateError("更新地址不能包含查询参数或片段")
     return value
@@ -292,4 +296,5 @@ def update_status() -> dict[str, Any]:
         "currentVersion": CURRENT_VERSION_NAME,
         "currentVersionCode": CURRENT_VERSION_CODE,
         "source": "GitHub 官方发布源",
+        "manifestUrl": OFFICIAL_MANIFEST_URL,
     }

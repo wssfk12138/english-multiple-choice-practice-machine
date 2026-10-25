@@ -1,8 +1,12 @@
 from pathlib import Path
+import ssl
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
 
 project_root = Path(SPECPATH).parents[1]
 name = 'EnglishPracticeMachinePublic'
+# Preserve the build runtime's companion SSL trust policy when provided.
+ssl_trust_policy = Path(ssl.__file__).with_name('codex-rejected-cas.pem')
+ssl_runtime_data = [(str(ssl_trust_policy), '.')] if ssl_trust_policy.is_file() else []
 if (project_root / 'tts/en_GB').exists():
     raise RuntimeError('Public build must not contain en_GB/Alan assets')
 if not (project_root / 'tts/en_US/model.onnx').is_file():
@@ -12,6 +16,7 @@ a = Analysis(
     pathex=[str(project_root)],
     binaries=collect_dynamic_libs('sherpa_onnx'),
     datas=[
+        *ssl_runtime_data,
         (str(project_root / 'tts/en_US'), 'tts/en_US'),
         *collect_data_files('sherpa_onnx'),
         (str(project_root / 'frontend/dist'), 'frontend/dist'),
