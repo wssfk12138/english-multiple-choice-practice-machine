@@ -75,6 +75,36 @@ jobs:
           if (-not (Test-Path -LiteralPath "tts\en_US\model.onnx")) { throw "Public TTS model is missing." }
           if (Test-Path -LiteralPath "tts\en_GB") { throw "Public build must not contain en_GB/Alan assets." }
 
+      - name: Install build dependencies and Inno Setup
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements.txt -r requirements-build.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          choco install innosetup --no-progress -y
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build frozen app and installer
+        shell: pwsh
+        env:
+          VERSION_NAME: ${{ inputs.version_name }}
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP "frozen"
+          python -m PyInstaller --noconfirm --clean `
+            --distpath (Join-Path $stage 'dist') `
+            --workpath (Join-Path $stage 'work') `
+            packaging\windows\EnglishPracticeMachinePublic.spec
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $iscc = Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path -LiteralPath $iscc)) { throw 'Inno Setup compiler is missing.' }
+          & $iscc "/DMyAppVersion=$($env:VERSION_NAME)" `
+            "/DSourceDir=$(Join-Path $stage 'dist\EnglishPracticeMachinePublic')" `
+            "/DOutputDir=$(Join-Path $stage 'installer')" `
+            packaging\windows\installer.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $setup = Get-ChildItem (Join-Path $stage 'installer') -Filter '*Setup.exe' | Select-Object -First 1
+          if (-not $setup) { throw 'Installer was not produced.' }
+          Copy-Item $setup.FullName (Join-Path $env:RUNNER_TEMP "english-practice-machine-windows-$($env:VERSION_NAME)-setup.exe")
+
       - name: Assemble package
         shell: pwsh
         run: |
@@ -139,6 +169,7 @@ jobs:
           $notes = if ($env:RELEASE_NOTES) { $env:RELEASE_NOTES } else { "英语刷题机 Windows 公测版 $env:VERSION_NAME" }
           gh release create "$env:TAG" `
             (Join-Path $env:RUNNER_TEMP "english-practice-machine-windows.zip") `
+            (Join-Path $env:RUNNER_TEMP "english-practice-machine-windows-$env:VERSION_NAME-setup.exe") `
             (Join-Path $env:RUNNER_TEMP "windows-update.json") `
             --title "英语刷题机 $env:VERSION_NAME" `
             --notes "$notes"
