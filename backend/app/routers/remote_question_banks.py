@@ -21,7 +21,7 @@ SETTING_KEY = "question_bank_catalog_url"
 
 def _read_url(connection) -> str:
     row = connection.execute("SELECT value FROM app_settings WHERE key = ?", (SETTING_KEY,)).fetchone()
-    return str(row["value"] if row else "")
+    return str(row["value"] if row else "").strip() or OFFICIAL_CATALOG
 
 
 def _fetch_catalog(url: str) -> dict:
@@ -51,7 +51,7 @@ def update_settings(payload: QuestionBankCatalogSettingsWrite, connection=Depend
         (SETTING_KEY, value),
     )
     connection.commit()
-    return {"question_bank_catalog_url": value}
+    return get_settings(connection)
 
 
 @router.post("/check")

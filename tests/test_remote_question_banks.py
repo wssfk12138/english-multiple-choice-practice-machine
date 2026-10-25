@@ -49,3 +49,19 @@ class RemoteQuestionBankRouterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OfficialCatalogDefaultTests(unittest.TestCase):
+    def test_new_and_blank_catalog_settings_use_official_default(self):
+        from backend.app.services.official_download_sources import OFFICIAL_CATALOG
+        from backend.app.schemas import QuestionBankCatalogSettingsWrite
+        connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
+        connection.row_factory = sqlite3.Row
+        connection.execute("CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        self.assertEqual(remote_question_banks.get_settings(connection)["question_bank_catalog_url"], OFFICIAL_CATALOG)
+        result = remote_question_banks.update_settings(QuestionBankCatalogSettingsWrite(question_bank_catalog_url=""), connection)
+        self.assertEqual(result["question_bank_catalog_url"], OFFICIAL_CATALOG)
+        custom = "https://example.com/catalog.json"
+        result = remote_question_banks.update_settings(QuestionBankCatalogSettingsWrite(question_bank_catalog_url=custom), connection)
+        self.assertEqual(result["question_bank_catalog_url"], custom)

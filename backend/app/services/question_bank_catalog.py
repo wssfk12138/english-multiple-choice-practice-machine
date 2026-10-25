@@ -5,6 +5,7 @@ import ipaddress
 import json
 import re
 import socket
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -13,6 +14,8 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from .esq import MAX_PACKAGE_BYTES
+from .official_download_sources import is_official_download_url
+from .updates import UpdateError, _validate_update_url
 
 
 MAX_CATALOG_BYTES = 2 * 1024 * 1024
@@ -71,7 +74,38 @@ class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+def _validate_official_transfer(url: str, *, redirect: bool = False) -> None:
+    # Only exact approved release paths/proxy wrappers bypass fake-IP DNS classification.
+    # Other GitHub repositories and arbitrary/private HTTPS destinations remain rejected.
+    if is_official_download_url(url):
+        return
+    try:
+        _validate_update_url(url, redirect=redirect)
+    except UpdateError as exc:
+        raise QuestionBankCatalogError(str(exc)) from exc
+
+
+class _OfficialGitHubRedirectHandler(urllib.request.HTTPRedirectHandler):
+    # Check every redirect while preserving normal HTTPS certificate validation.
+    # https://docs.python.org/3.12/library/urllib.request.html#urllib.request.HTTPRedirectHandler.redirect_request
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _validate_official_transfer(newurl, redirect=True)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _validate_response_url(initial_url: str, final_url: str) -> None:
+    if is_official_download_url(initial_url):
+        _validate_official_transfer(final_url, redirect=True)
+    else:
+        validate_remote_url(final_url, resolve_host=True)
+
+
 def _open_remote(request: urllib.request.Request, timeout: float):
+    if is_official_download_url(request.full_url):
+        # Proxy fake-IP DNS may return reserved addresses for public GitHub.
+        # The fixed project scope, restricted redirects and TLS identify this path.
+        _validate_official_transfer(request.full_url)
+        return urllib.request.build_opener(_OfficialGitHubRedirectHandler()).open(request, timeout=timeout)
     validate_remote_url(request.full_url, resolve_host=True)
     return urllib.request.build_opener(_SafeRedirectHandler()).open(request, timeout=timeout)
 
@@ -138,7 +172,7 @@ def fetch_catalog(url: str, *, timeout: float = 30) -> dict[str, Any]:
     request = urllib.request.Request(source_url, headers={"Accept": "application/json", "User-Agent": "EnglishPracticeMachine-QuestionBanks/1"})
     try:
         with _open_remote(request, timeout) as response:
-            validate_remote_url(response.geturl(), resolve_host=True)
+            _validate_response_url(source_url, response.geturl())
             raw = response.read(MAX_CATALOG_BYTES + 1)
     except QuestionBankCatalogError:
         raise
@@ -165,14 +199,16 @@ def download_package(package: dict[str, Any], target_dir: Path, *, timeout: floa
     sources = official_download_sources(package["downloadUrl"], public_proxy_fallback)
     for index, source in enumerate(sources):
         try:
-            return _download_package({**package, "downloadUrl": source}, target_dir, timeout=timeout)
+            return _download_package({**package, "downloadUrl": source}, target_dir, timeout=timeout,
+                                     fail_slow_start=index < len(sources) - 1)
         except QuestionBankCatalogError:
             if index == len(sources) - 1:
                 raise
     raise QuestionBankCatalogError("没有可用的题库下载地址")
 
 
-def _download_package(package: dict[str, Any], target_dir: Path, *, timeout: float = 60) -> Path:
+def _download_package(package: dict[str, Any], target_dir: Path, *, timeout: float = 60,
+                      fail_slow_start: bool = False) -> Path:
     request = urllib.request.Request(package["downloadUrl"], headers={"Accept": "application/vnd.english-study-question-bank, application/zip", "User-Agent": "EnglishPracticeMachine-QuestionBanks/1"})
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / f"{uuid.uuid4().hex}.esq"
@@ -181,13 +217,19 @@ def _download_package(package: dict[str, Any], target_dir: Path, *, timeout: flo
     total = 0
     try:
         with _open_remote(request, timeout) as response, temporary.open("wb") as output:
-            validate_remote_url(response.geturl(), resolve_host=True)
-            while chunk := response.read(1024 * 1024):
+            _validate_response_url(package["downloadUrl"], response.geturl())
+            # read1 yields available bytes; read(1 MiB) can wait indefinitely on a
+            # trickling large asset even though its socket never reaches timeout.
+            read_chunk = getattr(response, "read1", response.read)
+            started = time.monotonic()
+            while chunk := read_chunk(64 * 1024):
                 total += len(chunk)
                 if total > MAX_PACKAGE_BYTES or total > package["size"]:
                     raise QuestionBankCatalogError("远程题库超过目录声明大小或 ESQ 大小上限")
                 digest.update(chunk)
                 output.write(chunk)
+                if fail_slow_start and total < 1024 * 1024 and time.monotonic() - started >= min(timeout, 30):
+                    raise QuestionBankCatalogError("当前题库源下载过慢，正在尝试备用源")
         if total != package["size"]:
             raise QuestionBankCatalogError("远程题库大小校验失败")
         if digest.hexdigest().lower() != package["sha256"]:

@@ -29,6 +29,18 @@ class VocabularyModelValidationTests(unittest.TestCase):
         self.translate({'translations':[self.valid]},lambda:self.db.execute("UPDATE vocabulary_entries SET common_meaning='same second'"))
         self.assertEqual(self.entry()['common_meaning'],'same second')
         self.assertEqual(self.entry()['morphology'],'{}')
+    def test_word_spelling_is_not_a_morphology_label(self):
+        invalid={**self.valid,'morphology':{**self.valid['morphology'],'currentForm':'went'}}
+        self.translate({'translations':[invalid]})
+        self.assertEqual(self.entry()['translation_status'],'failed')
+        self.assertEqual(self.entry()['common_meaning'],'')
+    def test_base_and_plural_labels_remain_valid(self):
+        for term,label,lemma in [('lenient','原形','lenient'),('incentives','复数','incentive')]:
+            self.db.execute("UPDATE vocabulary_entries SET term=?,normalized_term=?,translation_status='translating'",(term,term));self.db.commit()
+            value={**self.valid,'lemma':lemma,'morphology':{**self.valid['morphology'],'lemma':lemma,'currentForm':label},'generatedExample':{'sentence':f'This example contains {term}.','translation':'这是一条例句。'}}
+            self.translate({'translations':[value]})
+            self.assertEqual(self.entry()['translation_status'],'ready')
+            self.assertEqual(json.loads(self.entry()['morphology'])['currentForm'],label)
     def test_manual_enrichment_preserves_meaning(self):
         self.db.execute("UPDATE vocabulary_entries SET common_meaning='manual',user_edited=1,translation_status='ready'"); self.db.commit()
         with patch.object(service,'chat_completion',return_value=json.dumps(self.valid)): service.enrich_vocabulary_entry(self.db,1)
