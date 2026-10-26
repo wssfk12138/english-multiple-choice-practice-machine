@@ -36,10 +36,12 @@ from .services.trash import purge_expired
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     initialize_database()
+    install_bundled_question_banks()
+    # Content remediation runs after the starter banks so a fresh install can
+    # verify the bundled package against the same manifest as upgraded installs.
     with connect() as connection:
         from .services.content_remediation import ensure_content_remediation
         ensure_content_remediation(connection)
-    install_bundled_question_banks()
     with connect() as connection:
         ensure_ai_model_catalog(connection)
         clean_machine_meanings(connection)

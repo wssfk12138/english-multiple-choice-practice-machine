@@ -69,6 +69,50 @@ def _conflict_resolutions(
     return resolutions
 
 
+def retire_stale_labels(
+    connection: Any,
+    package: dict[str, Any],
+    *,
+    profile_id: int | None = None,
+) -> int:
+    """Drop labels the package no longer ships for the questions it owns.
+
+    A package that omits a label for one of its own questions means the older
+    label described replaced content. Those rows stay locked and would keep
+    surfacing against the corrected text. Manual edits are never removed, and
+    labels on papers the package does not own are left alone.
+    """
+    manifest = package["manifest"]
+    package_id = manifest["packageId"]
+    content_version = manifest["contentVersion"]
+    shipped: set[str] = set()
+    for paper in package["papers"]:
+        for label_key in (paper.get("labels") or {}).get("labels", {}):
+            shipped.add(str(label_key))
+    query = """
+        SELECT l.question_id, q.external_key
+        FROM question_ai_labels AS l
+        JOIN questions AS q ON q.id = l.question_id
+        JOIN units AS u ON u.id = q.unit_id
+        JOIN papers AS p ON p.id = u.paper_id
+        WHERE p.package_id = ? AND p.content_version = ?
+          AND p.deleted_at IS NULL
+          AND l.user_edited = 0
+        """
+    params: tuple[Any, ...] = (package_id, content_version)
+    if profile_id is not None:
+        query += " AND p.profile_id = ?"
+        params = (package_id, content_version, profile_id)
+    rows = connection.execute(query, params).fetchall()
+    stale = [int(row["question_id"]) for row in rows if row["external_key"] not in shipped]
+    if stale:
+        connection.executemany(
+            "DELETE FROM question_ai_labels WHERE question_id = ? AND user_edited = 0",
+            [(question_id,) for question_id in stale],
+        )
+    return len(stale)
+
+
 def install_bundled_question_banks() -> list[dict[str, Any]]:
     """Install starter banks once, returning a compact status summary.
 
@@ -95,11 +139,14 @@ def install_bundled_question_banks() -> list[dict[str, Any]]:
                 (package_id, content_version),
             ).fetchone()
             if existing:
+                retired = retire_stale_labels(connection, package)
+                connection.commit()
                 results.append(
                     {
                         "packageId": package_id,
                         "contentVersion": content_version,
                         "status": "already_installed",
+                        "labelsRetired": retired,
                     }
                 )
                 continue
@@ -113,6 +160,7 @@ def install_bundled_question_banks() -> list[dict[str, Any]]:
                 import_ai_labels=True,
                 profile_id=profile_id,
             )
+            retired = retire_stale_labels(connection, package, profile_id=profile_id)
             connection.commit()
             results.append(
                 {
@@ -126,6 +174,7 @@ def install_bundled_question_banks() -> list[dict[str, Any]]:
                         for item in result.get("papers", [])
                     ),
                     "labelsImported": int(result.get("labelsImported", 0) or 0),
+                    "labelsRetired": retired,
                 }
             )
     return results

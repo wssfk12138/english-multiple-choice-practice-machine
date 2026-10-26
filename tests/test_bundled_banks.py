@@ -40,10 +40,9 @@ class BundledQuestionBankTests(unittest.TestCase):
         first = install_bundled_question_banks()
         self.assertEqual([item["status"] for item in first], ["installed", "installed"])
         self.assertEqual([item["questionCount"] for item in first], [805, 720])
-        # Reviewed content changes invalidate old labels; canonical numeric
-        # encoding also restores unchanged labels previously lost to 1/1.0.
-        # 计数由当前 examples/bundled-banks 资产决定；资产更新后旧期望 405/345 已过期。
-        self.assertEqual([item["labelsImported"] for item in first], [390, 344])
+        # 计数由当前 examples/bundled-banks 资产决定。英语一 1.2.0 起随包提供
+        # 767 条与内容哈希一致的锁定标注（旧 1.1.0 资产只有 390 条可用）。
+        self.assertEqual([item["labelsImported"] for item in first], [767, 344])
 
         with connect() as connection:
             profiles = {
@@ -94,7 +93,7 @@ class BundledQuestionBankTests(unittest.TestCase):
                     row["name"]: (int(row["total"]), int(row["locked"]))
                     for row in label_counts
                 },
-                {"考研英语一": (390, 390), "考研英语二": (344, 344)},
+                {"考研英语一": (767, 767), "考研英语二": (344, 344)},
             )
 
         second = install_bundled_question_banks()
@@ -132,6 +131,80 @@ class BundledQuestionBankTests(unittest.TestCase):
                 connection.execute("SELECT COUNT(*) AS count FROM papers").fetchone()["count"],
                 0,
             )
+
+    def test_stale_locked_labels_are_retired_but_manual_edits_kept(self) -> None:
+        from backend.app.database import connect, initialize_database
+        from backend.app.services.bundled_banks import (
+            install_bundled_question_banks,
+            retire_stale_labels,
+        )
+        from backend.app.services.esq import load_esq_package
+
+        initialize_database()
+        install_bundled_question_banks()
+        package_path = BUNDLED_BANK_DIR / 'postgraduate-english-one.esq'
+        package = load_esq_package(package_path)
+        with connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT q.id AS question_id, q.external_key, p.year, p.profile_id
+                FROM questions AS q
+                JOIN units AS u ON u.id = q.unit_id
+                JOIN papers AS p ON p.id = u.paper_id
+                WHERE p.package_id = 'wssfk.postgraduate-english-one.2010-2026'
+                  AND p.deleted_at IS NULL
+                ORDER BY q.id
+                """
+            ).fetchall()
+            shipped = {
+                key
+                for paper in package['papers']
+                for key in (paper.get('labels') or {}).get('labels', {})
+            }
+            stale = [row for row in rows if row['external_key'] not in shipped]
+            manual = [row for row in rows if row['external_key'] in shipped][0]
+            connection.execute(
+                'UPDATE question_ai_labels SET user_edited = 1 WHERE question_id = ?',
+                (manual['question_id'],),
+            )
+            # Simulate an upgraded library: the earlier package shipped a
+            # locked label for every question, including the ones this package
+            # no longer describes.
+            connection.executemany(
+                """
+                INSERT INTO question_ai_labels
+                    (question_id, primary_skill, locked, model_name)
+                VALUES (?, '旧版本标注', 1, 'legacy')
+                ON CONFLICT(question_id) DO NOTHING
+                """,
+                [(row['question_id'],) for row in stale],
+            )
+            connection.commit()
+        self.assertGreater(len(stale), 0)
+        with connect() as connection:
+            retired = retire_stale_labels(connection, package)
+            connection.commit()
+        self.assertEqual(retired, len(stale))
+        with connect() as connection:
+            remaining = {
+                row[0]
+                for row in connection.execute(
+                    'SELECT question_id FROM question_ai_labels'
+                )
+            }
+            kept = connection.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM question_ai_labels AS l
+                JOIN questions AS q ON q.id = l.question_id
+                JOIN units AS u ON u.id = q.unit_id
+                JOIN papers AS p ON p.id = u.paper_id
+                WHERE p.package_id = 'wssfk.postgraduate-english-one.2010-2026'
+                """
+            ).fetchone()['count']
+        self.assertTrue(remaining.isdisjoint({row['question_id'] for row in stale}))
+        self.assertIn(manual['question_id'], remaining)
+        self.assertEqual(kept, 767)
 
     def test_existing_user_paper_is_not_replaced(self) -> None:
         from backend.app.database import connect, initialize_database

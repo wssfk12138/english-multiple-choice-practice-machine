@@ -14,11 +14,11 @@ from typing import Any
 from ..config import DATA_DIR
 
 
-CURRENT_VERSION_NAME = os.environ.get("ENGLISH_PRACTICE_VERSION", "1.0.1")
+CURRENT_VERSION_NAME = os.environ.get("ENGLISH_PRACTICE_VERSION", "1.0.2")
 try:
-    CURRENT_VERSION_CODE = int(os.environ.get("ENGLISH_PRACTICE_VERSION_CODE", "3"))
+    CURRENT_VERSION_CODE = int(os.environ.get("ENGLISH_PRACTICE_VERSION_CODE", "4"))
 except ValueError:
-    CURRENT_VERSION_CODE = 3
+    CURRENT_VERSION_CODE = 4
 
 OFFICIAL_MANIFEST_URL = (
     "https://github.com/wssfk12138/english-multiple-choice-practice-machine"
